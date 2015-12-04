@@ -13,7 +13,7 @@
 static int NUM_THREADS = 100;
 static long long NUM_KEYS = 1000000;
 static char* HOST = "127.0.0.1";
-static int PORT = 4553;
+static int PORT = 9007;
 static char *SET_NAME = "foobar%d";
 
 typedef struct {

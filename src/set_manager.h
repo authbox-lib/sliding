@@ -81,7 +81,7 @@ int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int nu
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, uint64_t time_window);
+int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, uint64_t time_window, time_t timestamp);
 
 /**
  * Estimates the total size of a set

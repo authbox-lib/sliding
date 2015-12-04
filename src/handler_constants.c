@@ -3,7 +3,7 @@
 /*
  * Various messages and responses
  */
-static const char CLIENT_ERR[] = "Client Error: ";
+static const char CLIENT_ERR[] = "-CLIENT_ERR Client Error: ";
 static const int CLIENT_ERR_LEN = sizeof(CLIENT_ERR) - 1;
 
 static const char CMD_NOT_SUP[] = "Command not supported";
@@ -21,34 +21,37 @@ static const int SET_KEY_NEEDED_LEN = sizeof(SET_KEY_NEEDED) - 1;
 static const char SET_NEEDED[] = "Must provide set name";
 static const int SET_NEEDED_LEN = sizeof(SET_NEEDED) - 1;
 
+static const char WINDOW_NEEDED[] = "Must provide a window size";
+static const int WINDOW_NEEDED_LEN = sizeof(WINDOW_NEEDED) - 1;
+
 static const char BAD_SET_NAME[] = "Bad set name";
 static const int BAD_SET_NAME_LEN = sizeof(BAD_SET_NAME) - 1;
 
-static const char INTERNAL_ERR[] = "Internal Error\n";
+static const char INTERNAL_ERR[] = "-INTERNAL_ERROR\r\n";
 static const int INTERNAL_ERR_LEN = sizeof(INTERNAL_ERR) - 1;
 
-static const char SET_NOT_EXIST[] = "Set does not exist\n";
+static const char SET_NOT_EXIST[] = "-SET_NOT_EXIST\r\n";
 static const int SET_NOT_EXIST_LEN = sizeof(SET_NOT_EXIST) - 1;
 
-static const char SET_NOT_PROXIED[] = "Set is not proxied. Close it first.\n";
+static const char SET_NOT_PROXIED[] = "-NOT_PROXIED Close the set first\r\n";
 static const int SET_NOT_PROXIED_LEN = sizeof(SET_NOT_PROXIED) - 1;
 
-static const char DELETE_IN_PROGRESS[] = "Delete in progress\n";
+static const char DELETE_IN_PROGRESS[] = "+DELETE_IN_PROGRESS\r\n";
 static const int DELETE_IN_PROGRESS_LEN = sizeof(DELETE_IN_PROGRESS) - 1;
 
-static const char DONE_RESP[] = "Done\n";
+static const char DONE_RESP[] = "+OK\r\n";
 static const int DONE_RESP_LEN = sizeof(DONE_RESP) - 1;
 
-static const char EXISTS_RESP[] = "Exists\n";
+static const char EXISTS_RESP[] = "-EXISTS\r\n";
 static const int EXISTS_RESP_LEN = sizeof(EXISTS_RESP) - 1;
 
-static const char NEW_LINE[] = "\n";
+static const char NEW_LINE[] = "\r\n";
 static const int NEW_LINE_LEN = sizeof(NEW_LINE) - 1;
 
-static const char START_RESP[] = "START\n";
+static const char START_RESP[] = "START\r\n";
 static const int START_RESP_LEN = sizeof(START_RESP) - 1;
 
-static const char END_RESP[] = "END\n";
+static const char END_RESP[] = "END\r\n";
 static const int END_RESP_LEN = sizeof(END_RESP) - 1;
 
 typedef enum {

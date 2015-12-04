@@ -66,7 +66,7 @@ Here is an example configuration file:
 
     # Settings for hlld
     [hlld]
-    tcp_port = 4553
+    tcp_port = 9007
     data_dir = /mnt/hlld
     log_level = INFO
     flush_interval = 60
@@ -103,7 +103,7 @@ Configuration Options
 
 Each configuration option is documented below:
 
- * tcp\_port : Integer, sets the tcp port to listen on. Default 4553.
+ * tcp\_port : Integer, sets the tcp port to listen on. Default 9007.
 
  * port: Same as above. For compatibility.
 
@@ -165,7 +165,7 @@ exponentially with the precision, so it should be increased carefully.
 Protocol
 --------
 
-By default, hlld will listen for TCP connections on port 4553.
+By default, hlld will listen for TCP connections on port 9007.
 It uses a simple ASCII protocol that is very similar to memcached.
 
 A command has the following syntax::
@@ -286,7 +286,7 @@ Example
 Here is an example of a client flow, assuming hlld is
 running on the default port using just telnet::
 
-    $ telnet localhost 4553
+    $ telnet localhost 9007
     > list
     START
     END

@@ -13,7 +13,7 @@ START_TEST(test_config_get_default)
     hlld_config config;
     int res = config_from_filename(NULL, &config);
     fail_unless(res == 0);
-    fail_unless(config.tcp_port == 4553);
+    fail_unless(config.tcp_port == 9007);
     fail_unless(config.udp_port == 4554);
     fail_unless(strcmp(config.data_dir, "/tmp/hlld") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
@@ -35,7 +35,7 @@ START_TEST(test_config_bad_file)
     fail_unless(res == -ENOENT);
 
     // Should get the defaults...
-    fail_unless(config.tcp_port == 4553);
+    fail_unless(config.tcp_port == 9007);
     fail_unless(config.udp_port == 4554);
     fail_unless(strcmp(config.data_dir, "/tmp/hlld") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
@@ -61,7 +61,7 @@ START_TEST(test_config_empty_file)
     fail_unless(res == 0);
 
     // Should get the defaults...
-    fail_unless(config.tcp_port == 4553);
+    fail_unless(config.tcp_port == 9007);
     fail_unless(config.udp_port == 4554);
     fail_unless(strcmp(config.data_dir, "/tmp/hlld") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);

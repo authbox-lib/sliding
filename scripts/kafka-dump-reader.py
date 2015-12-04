@@ -13,7 +13,7 @@ from thrift.protocol import TBinaryProtocol
 from slidinghyper import SlidingHyperService
 
 
-host, port = 'localhost', 9090
+host, port = 'localhost', 9007
 transport = TSocket.TSocket(host, port)
 transport = TTransport.TBufferedTransport(transport)
 protocol = TBinaryProtocol.TBinaryProtocol(transport)

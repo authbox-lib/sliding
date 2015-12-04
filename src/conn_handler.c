@@ -80,6 +80,11 @@ int handle_client_connect(hlld_conn_handler *handle) {
         // Determine the command type
         conn_cmd_type type = determine_client_command(buf, buf_len, &arg_buf, &arg_buf_len);
 
+        // For now only SET/SIZE are supported.
+        if (type != SET_MULTI && type != SIZE) {
+          type = UNKNOWN;
+        }
+
         // Handle an error or unknown response
         switch(type) {
             case SET:
@@ -152,11 +157,20 @@ static void handle_set_cmd(hlld_conn_handler *handle, char *args, int args_len) 
     int err = buffer_after_terminator(args, args_len, ' ', &key, &key_len);
     if (err || key_len <= 1) CHECK_ARG_ERR();
 
+    // @TODO Read timestamp from input
+    time_t timestamp = time(NULL);
+
     // Setup the buffers
     char *key_buf[] = {key};
 
     // Call into the set manager
-    int res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, 1, time(NULL));
+    int res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, 1, timestamp);
+
+    // Automatically create the set if it doesn't exist
+    if (res == -1 ) {
+        setmgr_create_set(handle->mgr, args, NULL);
+        res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, 1, timestamp);
+    }
 
     // Generate the response
     handle_set_cmd_resp(handle, res);
@@ -173,33 +187,56 @@ static void handle_size_cmd(hlld_conn_handler *handle, char *args, int args_len)
         return;
     }
 
-    // Scan past the set name for the key
-    char *key;
-    char *time_window_string;
-    int time_window_len;
-    int err = buffer_after_terminator(args, args_len, ' ', &time_window_string, &time_window_len);
-    key = args;
-    if (err || args_len <= 1) {
-        handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
+    char *key = args;
+
+    char *remaining;
+    int remaining_len;
+    int err;
+
+    //  Fetch the timestamp out
+    uint64_t timestamp_64;
+    time_t timestamp;
+
+    err = buffer_after_terminator(args, args_len, ' ', &remaining, &remaining_len);
+    if (err || remaining_len <= 1) {
+        handle_client_err(handle->conn, (char*)&WINDOW_NEEDED, WINDOW_NEEDED_LEN);
         return;
     }
 
+    err = value_to_int64(remaining, &timestamp_64);
+    if (err || timestamp_64 <= 0) {
+        handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
+        return;
+    }
+    timestamp = (time_t) timestamp_64;
 
-    // Convert time window to an integer
+    // Fetch the time window
     uint64_t time_window;
-    err = value_to_int64(time_window_string, &time_window);
+    err = buffer_after_terminator(remaining, remaining_len, ' ', &remaining, &remaining_len);
+    if (err || remaining_len <= 1) {
+        handle_client_err(handle->conn, (char*)&WINDOW_NEEDED, WINDOW_NEEDED_LEN);
+        return;
+    }
+
+    err = value_to_int64(remaining, &time_window);
     if (err || time_window <= 0) {
         handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
         return;
     }
 
     uint64_t estimate;
-    err = setmgr_set_size(handle->mgr, key, &estimate, time_window);
-    if (err) INTERNAL_ERROR();
+    err = setmgr_set_size(handle->mgr, key, &estimate, time_window, timestamp);
+    if (err) {
+      INTERNAL_ERROR();
+      return;
+    }
 
     char estimate_string[512];
-    int estimate_length = snprintf(estimate_string, 512, "size %lld\n", (long long)estimate);
-    if (estimate_length == -1) INTERNAL_ERROR();
+    int estimate_length = snprintf(estimate_string, 512, ":%lld\r\n", (long long)estimate);
+    if (estimate_length == -1) {
+      INTERNAL_ERROR();
+      return;
+    }
 
     handle_client_resp(handle->conn, estimate_string, estimate_length);
 }
@@ -220,18 +257,32 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char *args, int args
 
     // Setup the buffers
     char *key_buf[MULTI_OP_SIZE];
-
-    // Scan all the keys
     char *key;
     int key_len;
-    int err = buffer_after_terminator(args, args_len, ' ', &key, &key_len);
+    int err;
+
+    // Scan for the timestamp
+    err = buffer_after_terminator(args, args_len, ' ', &key, &key_len);
+    if (err || key_len <= 1) CHECK_ARG_ERR();
+
+    uint64_t timestamp_64;
+    time_t timestamp;
+    err = value_to_int64(key, &timestamp_64);
+    if (err || timestamp_64 <= 0) {
+        handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
+        return;
+    }
+
+    timestamp = (time_t) timestamp_64;
+
+    // Scan all the keys
+    err = buffer_after_terminator(key, key_len, ' ', &key, &key_len);
     if (err || key_len <= 1) CHECK_ARG_ERR();
 
     // Parse any options
     char *curr_key = key;
     int res = 0;
     int index = 0;
-    time_t t = time(NULL);
     while (curr_key && *curr_key != '\0') {
         // Adds a zero terminator to the current key, scans forward
         buffer_after_terminator(key, key_len, ' ', &key, &key_len);
@@ -246,7 +297,14 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char *args, int args
         // If we have filled the buffer, check now
         if (index == MULTI_OP_SIZE) {
             // Handle the keys now
-            res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, index, t);
+            res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, index, timestamp);
+
+            // Automatically create the set if it doesn't exist
+            if (res == -1 ) {
+                setmgr_create_set(handle->mgr, args, NULL);
+                res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, index, timestamp);
+            }
+
             if (res) goto SEND_RESULT;
 
             // Reset the index
@@ -256,7 +314,11 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char *args, int args
 
     // Handle any remaining keys
     if (index) {
-        res = setmgr_set_keys(handle->mgr, args, key_buf, index, t);
+        res = setmgr_set_keys(handle->mgr, args, key_buf, index, timestamp);
+        if (res == -1 ) {
+            setmgr_create_set(handle->mgr, args, NULL);
+            res = setmgr_set_keys(handle->mgr, args, key_buf, index, timestamp);
+        }
     }
 
 SEND_RESULT:

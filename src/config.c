@@ -18,7 +18,7 @@
  * to grow quickly.
  */
 static const struct hlld_config DEFAULT_CONFIG = {
-    4553,               // TCP defaults to 8673
+    9007,               // TCP defaults to 8673
     4554,               // UDP on 8674
     (char*)"0.0.0.0",          // Default listen on 0.0.0.0
     (char*)"/tmp/hlld",        // Tmp data dir, until configured

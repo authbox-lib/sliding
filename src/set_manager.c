@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <syslog.h>
@@ -433,19 +434,22 @@ int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_name
  * @arg set_name The name of the set
  * @arg est Output pointer, the estimate on success.
  * @arg time_window Time window we query over
- * @return 0 on success, -1 if the set does not exist.
+ * @return 0 on success
  */
-int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, uint64_t time_window) {
+int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, uint64_t time_window, time_t timestamp) {
     // Get the set
     struct hlld_set_wrapper *set = take_set(mgr, set_name);
-    if (!set) return -1;
+    if (!set) {
+      *est = 0;
+      return 0;
+    }
 
     // Acquire the READ lock. We use the read lock
     // since we can handle concurrent read/writes.
     pthread_rwlock_rdlock(&set->rwlock);
 
     // Get the size
-    *est = hset_size(set->set, time_window, time(NULL));
+    *est = hset_size(set->set, time_window, timestamp);
 
     // Release the lock
     pthread_rwlock_unlock(&set->rwlock);
@@ -887,28 +891,6 @@ static int set_map_delete_cb(void *data, const unsigned char *key, uint32_t key_
 }
 
 /**
- * Works with scandir to set out non-hlld folders.
- */
-static int set_hlld_folders(CONST_DIRENT_T *d) {
-    // Get the file name
-    char *name = (char*)d->d_name;
-
-    // Look if it ends in ".data"
-    int name_len = strlen(name);
-
-    // Too short
-    if (name_len <= FOLDER_PREFIX_LEN) return 0;
-
-    // Compare the prefix
-    if (strncmp(name, FOLDER_PREFIX, FOLDER_PREFIX_LEN) == 0) {
-        return 1;
-    }
-
-    // Do not store
-    return 0;
-}
-
-/**
  * Loads the existing sets. This is not thread
  * safe and assumes that we are being initialized.
  */
@@ -925,22 +907,34 @@ static int load_existing_sets(struct hlld_setmgr *mgr) {
 
     // Add all the sets
     for (int i=0; i< num; i++) {
-        struct dirent **namelist_subdir = NULL;
-        char *subfolder_name = join_path(mgr->config->data_dir, namelist[i]->d_name);
-        int num_subdir = scandir(subfolder_name, &namelist_subdir, set_hlld_folders, NULL);
-
-        if (num_subdir >= 0) {
-            for(int j=0; j<num_subdir; j++) {
-                char *set_name = namelist_subdir[j]->d_name + FOLDER_PREFIX_LEN;
-
-                if (add_set(mgr, set_name, mgr->config, 0, 0)) {
-                    syslog(LOG_ERR, "Failed to load set '%s'!", set_name);
-                }
-                free(namelist_subdir[j]);
-            }
-            free(namelist_subdir);
-            free(subfolder_name);
+        DIR *dir = NULL;
+        struct dirent *file = NULL;
+        if (namelist[i]->d_name[0] == '.') {
+            continue;
         }
+
+        char *subfolder_name = join_path(mgr->config->data_dir, namelist[i]->d_name);
+        syslog(LOG_INFO, "Loading subfolder: %s", subfolder_name);
+
+        if ((dir = opendir(subfolder_name)) != NULL) {
+            while ((file = readdir(dir)) != NULL) {
+              if (file->d_name[0] == '.') {
+                continue;
+              }
+              char *set_name;
+              int res = asprintf(&set_name, "%s%s", namelist[i]->d_name, file->d_name);
+              assert(res != -1);
+
+              if (add_set(mgr, set_name, mgr->config, 0, 0)) {
+                  syslog(LOG_ERR, "Failed to load set '%s'!", set_name);
+              }
+              free(set_name);
+            }
+            closedir(dir);
+        } else {
+            syslog(LOG_ERR, "Failed to open directory '%s'", subfolder_name);
+        }
+        free(subfolder_name);
     }
 
     for (int i=0; i < num; i++) free(namelist[i]);

@@ -23,14 +23,11 @@ objs =  env_with_err.Object('src/config', 'src/config.c') + \
         env_without_err.Object('src/networking', 'src/networking.c') + \
         env_with_err.Object('src/conn_handler', 'src/conn_handler.c') + \
         env_with_err.Object('src/art', 'src/art.c') + \
-        env_with_err.Object('src/background', 'src/background.c') + \
-        env_without_err.Object('src/thrift_server', 'src/thrift_server.cpp') + \
-        env_without_err.Object('gen-cpp/sliding-hyper_types', 'gen-cpp/sliding-hyper_types.cpp') + \
-        env_without_err.Object('gen-cpp/SlidingHyperService', 'gen-cpp/SlidingHyperService.cpp')
+        env_with_err.Object('src/background', 'src/background.c')
         #env_without_err.Object('deps/libev/ev', 'deps/libev/ev.c')
 
 
-libs = ["pthread", murmur, inih, "m", "thrift"]
+libs = ["pthread", murmur, inih, "m"]
 if plat == 'Linux':
    libs.append("rt")
 

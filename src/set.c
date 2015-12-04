@@ -14,27 +14,10 @@
 #include "type_compat.h"
 
 /*
- * Generates the folder name, given a set name.
- */
-static const char* SET_FOLDER_NAME = "hlld.%s";
-
-/**
- * Format for the data file names.
- */
-static const char* DATA_FILE_NAME = "registers.mmap";
-
-/*
- * Generates the config file name
- */
-static const char* CONFIG_FILENAME = "config.ini";
-
-/*
  * Static delarations
  */
 static int thread_safe_fault(struct hlld_set *f);
 static int timediff_msec(struct timeval *t1, struct timeval *t2);
-
-static int filter_out_special(CONST_DIRENT_T *d);
 
 // Link the external murmur hash in
 extern void MurmurHash3_x64_128(const void * key, const int len, const uint32_t seed, void *out);
@@ -69,51 +52,29 @@ int init_set(struct hlld_config *config, char *set_name, int discover, struct hl
     s->set_config.sliding_period = config->sliding_period;
     s->set_config.sliding_precision = config->sliding_precision;
 
-    // Get the folder name
-    char *folder_name = NULL;
-    int res;
-    res = asprintf(&folder_name, SET_FOLDER_NAME, s->set_name);
-    assert(res != -1);
-
     char subdir_name[11];
     int set_name_len = strlen(s->set_name);
-    int i=0;
-    for(; i<5 && set_name_len-i-1 >= 0; i++) {
-        subdir_name[i] = s->set_name[set_name_len-i-1];
+    int prefix_dir_len=0;
+    for(; prefix_dir_len < 2 && prefix_dir_len < set_name_len - 1; prefix_dir_len++) {
+        subdir_name[prefix_dir_len] = s->set_name[prefix_dir_len];
     }
-    subdir_name[i] = 0;
+    subdir_name[prefix_dir_len] = 0;
 
     s->full_path = join_path(config->data_dir, subdir_name);
+
     // Try to create the folder path
-    res = mkdir(s->full_path, 0755);
+    int res = mkdir(s->full_path, 0755);
     if (res && errno != EEXIST) {
         syslog(LOG_ERR, "Failed to create set directory '%s'. Err: %d [%d]", s->full_path, res, errno);
         return res;
     }
 
     // Compute the full path
-    s->full_path = join_path(s->full_path, folder_name);
-    free(folder_name);
+    s->full_path = join_path(s->full_path, s->set_name + prefix_dir_len);
 
     // Initialize the locks
     INIT_HLLD_SPIN(&s->hll_update);
     pthread_mutex_init(&s->hll_lock, NULL);
-
-    // Try to create the folder path
-    res = mkdir(s->full_path, 0755);
-    if (res && errno != EEXIST) {
-        syslog(LOG_ERR, "Failed to create set directory '%s'. Err: %d [%d]", s->full_path, res, errno);
-        return res;
-    }
-
-    // Read in the set_config
-    char *config_name = join_path(s->full_path, (char*)CONFIG_FILENAME);
-    res = set_config_from_filename(config_name, &s->set_config);
-    free(config_name);
-    if (res && res != -ENOENT) {
-        syslog(LOG_ERR, "Failed to read set '%s' configuration. Err: %d [%d]", s->set_name, res, errno);
-        return res;
-    }
 
     // Discover the existing set if we need to
     res = 0;
@@ -194,28 +155,15 @@ int hset_flush(struct hlld_set *set) {
     //set->set_config.size = hset_size_total(set);
 
     // Write out set_config
-    int res = 0;
-    char *serialized_name = join_path(set->full_path, (char*)DATA_FILE_NAME);
-    if (set->is_config_dirty == 1) {
-        char *config_name = join_path(set->full_path, (char*)CONFIG_FILENAME);
-        res = update_filename_from_set_config(config_name, &set->set_config);
-        free(config_name);
-        if (res) {
-            syslog(LOG_ERR, "Failed to write set '%s' configuration. Err: %d.",
-                    set->set_name, res);
-        }
-        set->is_config_dirty = 0;
-    }
 
     // Turn dirty off
     set->is_dirty = 0;
 
     // Flush the set
-    res = 0;
+    int res = 0;
     if (!set->set_config.in_memory) {
-        res = serialize_hll_to_filename(serialized_name, &set->hll);
+        res = serialize_hll_to_filename(set->full_path, &set->hll);
     }
-    free(serialized_name);
 
     // Compute the elapsed time
     gettimeofday(&end, NULL);
@@ -255,32 +203,7 @@ int hset_delete(struct hlld_set *set) {
     // Close first
     hset_close(set);
 
-    // Delete the files
-    struct dirent **namelist = NULL;
-    int num;
-
-    // Filter only data dirs, in sorted order
-    num = scandir(set->full_path, &namelist, filter_out_special, NULL);
-    syslog(LOG_INFO, "Deleting %d files for set %s.", num, set->set_name);
-
-    // Free the memory associated with scandir
-    for (int i=0; i < num; i++) {
-        char *file_path = join_path(set->full_path, namelist[i]->d_name);
-        if (unlink(file_path)) {
-            syslog(LOG_ERR, "Failed to delete: %s. %s", file_path, strerror(errno));
-        }
-        free(file_path);
-    }
-
-    // Free the memory associated with scandir
-    for (int i=0; i < num; i++) {
-        free(namelist[i]);
-    }
-    if (namelist)
-        free(namelist);
-
-    // Delete the directory
-    if (rmdir(set->full_path)) {
+    if (unlink(set->full_path)) {
         syslog(LOG_ERR, "Failed to delete: %s. %s", set->full_path, strerror(errno));
     }
 
@@ -373,7 +296,6 @@ uint64_t hset_byte_size(struct hlld_set *set) {
 static int thread_safe_fault(struct hlld_set *s) {
     // Acquire lock
     int res = 0;
-    char *bitmap_path = NULL;
     pthread_mutex_lock(&s->hll_lock);
 
     // Bail if we already faulted in
@@ -394,22 +316,19 @@ static int thread_safe_fault(struct hlld_set *s) {
 
     }
 
-    // Get the full path to the bitmap
-    bitmap_path = join_path(s->full_path, (char*)DATA_FILE_NAME);
-
     // Check if the register file exists
     struct stat buf;
-    res = stat(bitmap_path, &buf);
+    res = stat(s->full_path, &buf);
     if(res == 0) {
-        //syslog(LOG_ERR, "Discovered HLL set: %s.", bitmap_path);
+        //syslog(LOG_ERR, "Discovered HLL set: %s.", s->full_path);
     }
 
     // Handle if the file exists and contains data (read existing hll)
     if (res == 0 && buf.st_size != 0) {
         //syslog(LOG_ERR, "Discovered HLL set: %s.", bitmap_path);
-        res = unserialize_hll_from_filename(bitmap_path, &s->hll);
+        res = unserialize_hll_from_filename(s->full_path, &s->hll);
         if (res) {
-            syslog(LOG_ERR, "Failed to load bitmap: %s. %s", bitmap_path, strerror(errno));
+            syslog(LOG_ERR, "Failed to load bitmap: %s. %s", s->full_path, strerror(errno));
             goto LEAVE;
         }
 
@@ -428,7 +347,7 @@ static int thread_safe_fault(struct hlld_set *s) {
                 &s->hll); 
     // Handle any other error
     } else {
-        syslog(LOG_ERR, "Failed to query the register file for: %s. %s", bitmap_path, strerror(errno));
+        syslog(LOG_ERR, "Failed to query the register file for: %s. %s", s->full_path, strerror(errno));
         goto LEAVE;
     }
 
@@ -436,23 +355,7 @@ LEAVE:
     // Release lock
     pthread_mutex_unlock(&s->hll_lock);
 
-    // Free the bitmap path if any
-    if (bitmap_path) free(bitmap_path);
     return res;
-}
-
-/**
- * Works with scandir to filter out special files
- */
-static int filter_out_special(CONST_DIRENT_T *d) {
-    // Get the file name
-    char *name = (char*)d->d_name;
-
-    // Make sure its not speci
-    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
-        return 0;
-    }
-    return 1;
 }
 
 /**
