@@ -136,7 +136,6 @@ void hll_register_add_point(hll_t *h, hll_register *r, hll_dense_point p) {
 
     // if we have exceeded capacity we resize
     if(r->size > r->capacity) {
-
         r->capacity = (size_t)(GROWTH_FACTOR * r->capacity + 1);
         r->points = (hll_dense_point*)realloc(r->points, r->capacity*sizeof(hll_dense_point));
     }
@@ -200,9 +199,11 @@ void hll_sparse_add_point(hll_t *h, uint64_t hash, time_t time_added) {
     // do this in reverse order because we remove points from the right end
     for (int i=sparse->size-1; i>=0; i--) {
         uint64_t other_hash = sparse->points[i].hash;
-        // if we are inserting the same value again just break out
-        if (other_hash == hash)
+        // if we are inserting the same value again just update timestamp
+        if (other_hash == hash) {
+            sparse->points[i].timestamp = time_added;
             return;
+        }
 
         // if the old register is too ooold
         if (sparse->points[i].timestamp <= max_time) {
