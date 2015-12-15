@@ -7,6 +7,9 @@
 typedef struct hlld_networking hlld_networking;
 typedef struct conn_info hlld_conn_info;
 
+#define EXTRACT_PROTO_ERROR (-2)
+#define EXTRACT_NO_DATA (-1)
+
 /**
  * Initializes the networking interfaces
  * @arg config Takes the server configuration

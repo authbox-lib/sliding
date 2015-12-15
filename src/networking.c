@@ -855,42 +855,47 @@ static int send_client_response_direct(conn_info *conn, char **response_buffers,
 /**
  * This method reads trailing newlines from the circular buffer
  *
- * @return New read cursor on success, -1 on failure
+ * @return New read cursor on success
+ *         EXTRACT_NO_DATA (-1) on missing data
+ *         EXTRACT_PROTO_ERROR (-2) on protocol error
  **/
 int read_trailing_newline(hlld_conn_info *conn, int read_cursor) {
-  if (conn->input.read_cursor == conn->input.write_cursor) {
-    return -1;
+  if (read_cursor == conn->input.write_cursor) {
+    return EXTRACT_NO_DATA;
   }
   if (conn->input.buffer[read_cursor] == '\r') {
     read_cursor = (read_cursor + 1) % conn->input.buf_size;
   }
 
   // check again if we exhausted the buffer
-  if (conn->input.read_cursor == conn->input.write_cursor) {
-    return -1;
+  if (read_cursor == conn->input.write_cursor) {
+    return EXTRACT_NO_DATA;
   }
   if (conn->input.buffer[read_cursor] == '\n') {
     return (read_cursor + 1) % conn->input.buf_size;
   }
-  return -1;
+
+  // If we get here there was a protocol error
+  return EXTRACT_PROTO_ERROR;
 }
 
 
 /**
  * This method reads a count from the circular read buffer
  *
- * @return New read cursor on success, -1 on failure
+ * @return New read cursor on success
+ *         EXTRACT_NO_DATA (-1) on missing data
+ *         EXTRACT_PROTO_ERROR (-2) on protocol error
  **/
 int read_count(hlld_conn_info *conn, char initial, int read_cursor, int *count) {
   // Early exit if we're out of data (can't read initial char)
-  if (conn->input.read_cursor == conn->input.write_cursor) {
-    return -1;
+  if (read_cursor == conn->input.write_cursor) {
+    return EXTRACT_NO_DATA;
   }
 
-  // If the initial char is not correct, we should throw somehow. For now just
-  // return -1
+  // If the initial char is not correct, return with a protocol error
   if (conn->input.buffer[read_cursor] != initial) {
-    return -1;
+    return EXTRACT_PROTO_ERROR;
   }
   read_cursor = (read_cursor + 1) % conn->input.buf_size;
   
@@ -903,7 +908,7 @@ int read_count(hlld_conn_info *conn, char initial, int read_cursor, int *count) 
       *count = result;
       return read_trailing_newline(conn, read_cursor);
     } else {
-      return -1;
+      return EXTRACT_PROTO_ERROR;
     }
     read_cursor = (read_cursor + 1) % conn->input.buf_size;
   }
@@ -915,12 +920,14 @@ int read_count(hlld_conn_info *conn, char initial, int read_cursor, int *count) 
     } else if (conn->input.buffer[read_cursor] == '\r' || conn->input.buffer[read_cursor] == '\n') {
       *count = result;
       return read_trailing_newline(conn, read_cursor);
+    } else {
+      return EXTRACT_PROTO_ERROR;
     }
     read_cursor++;
   }
 
   // If we did not find a full count, we can exit here
-  return -1;
+  return EXTRACT_NO_DATA;
 }
 
 
@@ -937,7 +944,9 @@ int read_count(hlld_conn_info *conn, char initial, int read_cursor, int *count) 
  * @arg buf_len Output parameter, the length of the buffer.
  * @arg arg_count Detected number of arguments, the length of the buffer.
  * @arg free_command Output parameter, should a buffer be freed by the caller. -1 if none
- * @return 0 on success, -1 if the terminator is not found.
+ * @return 0 on success
+ *         EXTRACT_NO_DATA (-1) on missing data
+ *         EXTRACT_PROTO_ERROR (-2) on protocol error
  */
 int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_args, int *arg_count, int *free_arg) {
     // First we need to find the terminator...
@@ -946,14 +955,13 @@ int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_ar
     int read_cursor = conn->input.read_cursor;
 
     read_cursor = read_count(conn, '*', read_cursor, arg_count);
-
     if (read_cursor < 0) {
-      return -1;
+      return read_cursor;
     }
 
     // @TODO: This should be a protocol error
     if (*arg_count >= max_args) {
-      return -1;
+      return EXTRACT_PROTO_ERROR;
     }
 
     int start_read_cursor = read_cursor;
@@ -965,7 +973,7 @@ int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_ar
     for (arg = 0; arg < *arg_count; arg++) {
       read_cursor = read_count(conn, '$', read_cursor, &arg_lens[arg]);
       if (read_cursor < 0) {
-        return -1;
+        return read_cursor;
       }
 
       args[arg] = conn->input.buffer + read_cursor;
@@ -975,40 +983,41 @@ int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_ar
       if (read_cursor > conn->input.write_cursor) {
         read_cursor += arg_lens[arg];
 
-        if (read_cursor > conn->input.buf_size) {
+        if (read_cursor >= conn->input.buf_size) {
           read_cursor = read_cursor % conn->input.buf_size;
 
           // If we do extract a command this argument will have to be malloc'ed
           *free_arg = arg;
 
           if (read_cursor > conn->input.write_cursor) {
-            return -1;
+            return EXTRACT_NO_DATA;
           }
         }
       } else {
         read_cursor += arg_lens[arg];
-        if (read_cursor > conn->input.write_cursor) {
-          return -1;
+        if (read_cursor >= conn->input.write_cursor) {
+          return EXTRACT_NO_DATA;
         }
       }
 
       // Try read the trailing newline after the argument
       read_cursor = read_trailing_newline(conn, read_cursor);
       if (read_cursor < 0) {
-        return -1;
+        return read_cursor;
       }
     }
     
     // Okay! We have a complete command.
 
     // If there was a command that wrapped around, allocate it seperately
-    if (*free_arg > 0) {
-      int start_size = (conn->input.buffer + conn->input.buf_size) - args[*free_arg];
-      int end_size = arg_lens[*free_arg] - start_size;
+    if (*free_arg >= 0) {
+      int end_size = (conn->input.buffer + conn->input.buf_size) - args[*free_arg];
+      int start_size = arg_lens[*free_arg] - end_size;
 
       char *alloc_arg = (char*)malloc(start_size + end_size + 1);
       memcpy(alloc_arg, args[*free_arg], end_size);
       memcpy(alloc_arg + end_size, conn->input.buffer, start_size);
+      alloc_arg[start_size + end_size] = '\0';
 
       args[*free_arg] = alloc_arg;
     }

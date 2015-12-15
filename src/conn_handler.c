@@ -92,7 +92,11 @@ int handle_client_connect(hlld_conn_handler *handle) {
     int status;
     while (1) {
         status = extract_command(handle->conn, args, arg_lens, MAX_ARGS, &arg_count, &free_arg);
-        if (status == -1) break; // Return if no command is available
+        if (status == EXTRACT_NO_DATA) {
+          return 0;
+        } else if (status < 0) {
+          return -1;
+        }
 
         // Determine the command type
         conn_cmd_type type;
@@ -149,8 +153,6 @@ int handle_client_connect(hlld_conn_handler *handle) {
           free(args[free_arg]);
         }
     }
-
-    return 0;
 }
 
 /**
