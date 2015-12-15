@@ -38,25 +38,26 @@
 }
 
 /* Static method declarations */
-static void handle_set_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_echo_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_set_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
-static void handle_create_cmd(hlld_conn_handler *handle, char *args, int arg_count);
-static void handle_drop_cmd(hlld_conn_handler *handle, char *args, int arg_count);
-static void handle_close_cmd(hlld_conn_handler *handle, char *args, int arg_count);
-static void handle_clear_cmd(hlld_conn_handler *handle, char *args, int arg_count);
-static void handle_list_cmd(hlld_conn_handler *handle, char *args, int arg_count);
-static void handle_info_cmd(hlld_conn_handler *handle, char *args, int arg_count);
-static void handle_flush_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_create_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_drop_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_close_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_clear_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_flush_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 
+static void handle_info_cmd(hlld_conn_handler *handle, int arg_count);
 
 static inline void handle_set_cmd_resp(hlld_conn_handler *handle, int res);
 static inline void handle_client_resp(hlld_conn_info *conn, char* resp_mesg, int resp_len);
+static inline void handle_string_resp(hlld_conn_info *conn, char* resp_mesg, int resp_len);
 static void handle_client_err(hlld_conn_info *conn, char* err_msg, int msg_len);
 
 static conn_cmd_type determine_client_command(char *cmd);
-
-static int buffer_after_terminator(char *buf, int buf_len, char terminator, char **after_term, int *after_len);
 
 // Simple struct to hold data for a callback
 typedef struct {
@@ -87,11 +88,11 @@ int handle_client_connect(hlld_conn_handler *handle) {
     int arg_count, free_arg;
 
     char *args[MAX_ARGS];
-    int arg_lens[MAX_ARGS];
+    int args_len[MAX_ARGS];
 
     int status;
     while (1) {
-        status = extract_command(handle->conn, args, arg_lens, MAX_ARGS, &arg_count, &free_arg);
+        status = extract_command(handle->conn, args, args_len, MAX_ARGS, &arg_count, &free_arg);
         if (status == EXTRACT_NO_DATA) {
           return 0;
         } else if (status < 0) {
@@ -106,42 +107,43 @@ int handle_client_connect(hlld_conn_handler *handle) {
             type = UNKNOWN;
         }
 
-        // For now only SET/SIZE are supported.
-        if (type != SET_MULTI && type != SIZE) {
-          type = UNKNOWN;
-        }
-
         // Handle an error or unknown response
         switch(type) {
+            case ECHO:
+                handle_echo_cmd(handle, args + 1, args_len + 1, arg_count - 1);
+                break;
             case SET:
-                handle_set_cmd(handle, NULL, 0);
+                handle_set_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case SET_MULTI:
-                handle_set_multi_cmd(handle, args + 1, arg_lens + 1, arg_count - 1);
+                handle_set_multi_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case CREATE:
-                handle_create_cmd(handle, NULL, 0);
+                handle_create_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case DROP:
-                handle_drop_cmd(handle, NULL, 0);
+                handle_drop_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case CLOSE:
-                handle_close_cmd(handle, NULL, 0);
+                handle_close_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case CLEAR:
-                handle_clear_cmd(handle, NULL, 0);
+                handle_clear_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case LIST:
-                handle_list_cmd(handle, NULL, 0);
+                handle_list_cmd(handle, args + 1, args_len + 1, arg_count - 1);
+                break;
+            case DETAIL:
+                handle_detail_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case INFO:
-                handle_info_cmd(handle, NULL, 0);
+                handle_info_cmd(handle, arg_count - 1);
                 break;
             case FLUSH:
-                handle_flush_cmd(handle, NULL, 0);
+                handle_flush_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case SIZE:
-                handle_size_cmd(handle, args + 1, arg_lens + 1, arg_count - 1);
+                handle_size_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             default:
                 handle_client_err(handle->conn, (char*)&CMD_NOT_SUP, CMD_NOT_SUP_LEN);
@@ -164,12 +166,33 @@ void periodic_update(hlld_conn_handler *handle) {
 }
 
 
+static void handle_echo_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+  if (args_count != 1 || args_len[0] < 1) {
+    BAD_ARG_ERR();
+  }
+
+  char length_string[512];
+  int length_length = snprintf(length_string, 512, "$%d\r\n", args_len[0]);
+  if (length_length == -1) {
+    INTERNAL_ERROR();
+    return;
+  }
+
+  char *buffers[] = {length_string, args[0], (char *)"\r\n"};
+  int sizes[] = {length_length, args_len[0], 2};
+  send_client_response(handle->conn, (char**)&buffers, (int*)&sizes, 3);
+}
+
 /**
  * Internal method to handle a command that relies
  * on a set name and a single key, responses are handled using
  * handle_multi_response.
  */
-static void handle_set_cmd(hlld_conn_handler *handle, char *args, int args_len) {
+static void handle_set_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+  if (handle && args && args_len && args_count) {
+    return;
+  }
+  /*
     #define CHECK_ARG_ERR() { \
         handle_client_err(handle->conn, (char*)&SET_KEY_NEEDED, SET_KEY_NEEDED_LEN); \
         return; \
@@ -200,6 +223,7 @@ static void handle_set_cmd(hlld_conn_handler *handle, char *args, int args_len) 
 
     // Generate the response
     handle_set_cmd_resp(handle, res);
+  */
 }
 
 /**
@@ -321,7 +345,12 @@ SEND_RESULT:
 /**
  * Internal command used to handle set creation.
  */
-static void handle_create_cmd(hlld_conn_handler *handle, char *args, int args_len) {
+static void handle_create_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+  if (handle && args && args_len && args_count) {
+    return;
+  }
+  return;
+  /*
     // If we have no args, complain.
     if (!args) {
         handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
@@ -422,6 +451,7 @@ static void handle_create_cmd(hlld_conn_handler *handle, char *args, int args_le
             if (config) free(config);
             break;
     }
+  */
 }
 
 
@@ -430,8 +460,13 @@ static void handle_create_cmd(hlld_conn_handler *handle, char *args, int args_le
  * on a set name and a single key, responses are handled using
  * handle_multi_response.
  */
-static void handle_setop_cmd(hlld_conn_handler *handle, char *args, int args_len,
+static void handle_setop_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count,
         int(*setmgr_func)(struct hlld_setmgr *, char*)) {
+  if (setmgr_func && handle && args && args_len && args_count) {
+    return;
+  }
+  return;
+  /*
     // If we have no args, complain.
     if (!args) {
         handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
@@ -450,18 +485,19 @@ static void handle_setop_cmd(hlld_conn_handler *handle, char *args, int args_len
     // Call into the set manager
     int res = setmgr_func(handle->mgr, args);
     handle_set_cmd_resp(handle, res);
+  */
 }
 
-static void handle_drop_cmd(hlld_conn_handler *handle, char *args, int args_len) {
-    handle_setop_cmd(handle, args, args_len, setmgr_drop_set);
+static void handle_drop_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+    handle_setop_cmd(handle, args, args_len, args_count, setmgr_drop_set);
 }
 
-static void handle_close_cmd(hlld_conn_handler *handle, char *args, int args_len) {
-    handle_setop_cmd(handle, args, args_len, setmgr_unmap_set);
+static void handle_close_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+    handle_setop_cmd(handle, args, args_len, args_count, setmgr_unmap_set);
 }
 
-static void handle_clear_cmd(hlld_conn_handler *handle, char *args, int args_len) {
-    handle_setop_cmd(handle, args, args_len, setmgr_clear_set);
+static void handle_clear_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+    handle_setop_cmd(handle, args, args_len, args_count, setmgr_clear_set);
 }
 
 // Callback invoked by list command to create an output
@@ -476,7 +512,7 @@ static void list_set_cb(void *data, char *set_name, struct hlld_set *set) {
     uint64_t estimate = set->set_config.size;
     setmgr_set_size_total(cb_data->mgr, set_name, &estimate);
 
-    res = asprintf(cb_data->output, "%s %f %u %llu %llu\n",
+    res = asprintf(cb_data->output, "+%s %f %u %llu %llu\r\n",
             set_name,
             set->set_config.default_eps,
             set->set_config.default_precision,
@@ -485,27 +521,42 @@ static void list_set_cb(void *data, char *set_name, struct hlld_set *set) {
     assert(res != -1);
 }
 
-static void handle_list_cmd(hlld_conn_handler *handle, char *args, int args_len) {
+static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+
+    const char *prefix;
+    if (args_count == 0) {
+        prefix = "";
+    } else if (args_count == 1) {
+        prefix = args[0];
+    } else {
+        BAD_ARG_ERR();
+    }
+
     (void)args_len;
 
     // List all the sets
     struct hlld_set_list_head *head;
-    int res = setmgr_list_sets(handle->mgr, args, &head);
+    int res = setmgr_list_sets(handle->mgr, prefix, &head);
     if (res != 0) {
         INTERNAL_ERROR();
         return;
     }
 
     // Allocate buffers for the responses
-    int num_out = (head->size+2);
+    int num_out = (head->size+1);
     char** output_bufs = (char**)malloc(num_out * sizeof(char*));
     int* output_bufs_len = (int*)malloc(num_out * sizeof(int));
 
+    char count_string[512];
+    int count_length = snprintf(count_string, 512, "*%d\r\n", head->size);
+    if (count_length < 1) {
+      INTERNAL_ERROR();
+      return;
+    }
+
     // Setup the START/END lines
-    output_bufs[0] = (char*)&START_RESP;
-    output_bufs_len[0] = START_RESP_LEN;
-    output_bufs[head->size+1] = (char*)&END_RESP;
-    output_bufs_len[head->size+1] = END_RESP_LEN;
+    output_bufs[0] = count_string;
+    output_bufs_len[0] = count_length;
 
     // Generate the responses
     char *resp;
@@ -537,7 +588,7 @@ static void handle_list_cmd(hlld_conn_handler *handle, char *args, int args_len)
 // Callback invoked by list command to create an output
 // line for each set. We hold a set handle which we
 // can use to get some info about it
-static void info_set_cb(void *data, char *set_name, struct hlld_set *set) {
+static void detail_set_cb(void *data, char *set_name, struct hlld_set *set) {
     (void)set_name;
     set_cb_data *cb_data = (set_cb_data *)data;
 
@@ -553,14 +604,14 @@ static void info_set_cb(void *data, char *set_name, struct hlld_set *set) {
 
     // Generate a formatted string output
     int res;
-    res = asprintf(cb_data->output, "in_memory %d\n\
-page_ins %llu\n\
-page_outs %llu\n\
-epsilon %f\n\
-precision %u\n\
-sets %llu\n\
-size %llu\n\
-storage %llu\n",
+    res = asprintf(cb_data->output, "in_memory:%d\n\
+page_ins:%llu\n\
+page_outs:%llu\n\
+epsilon:%f\n\
+precision:%u\n\
+sets:%llu\n\
+size:%llu\n\
+storage:%llu\n",
     ((hset_is_proxied(set)) ? 0 : 1),
     (unsigned long long)counters->page_ins, (unsigned long long)counters->page_outs,
     set->set_config.default_eps,
@@ -571,31 +622,17 @@ storage %llu\n",
     assert(res != -1);
 }
 
-static void handle_info_cmd(hlld_conn_handler *handle, char *args, int args_len) {
+static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
     // If we have no args, complain.
-    if (!args) {
+    if (args_count != 1 || args_len[0] < 1) {
         handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
         return;
     }
 
-    // Scan past the set name
-    char *key;
-    int key_len;
-    int after = buffer_after_terminator(args, args_len, ' ', &key, &key_len);
-    if (after == 0) {
-        handle_client_err(handle->conn, (char*)&UNEXPECTED_ARGS, UNEXPECTED_ARGS_LEN);
-        return;
-    }
-
-    // Create output buffers
-    char *output[] = {(char*)&START_RESP, NULL, (char*)&END_RESP};
-    int lens[] = {START_RESP_LEN, 0, END_RESP_LEN};
-
-    // Invoke the callback to get the set stats
-    set_cb_data cb_data = {handle->mgr, &output[1]};
-    int res = setmgr_set_cb(handle->mgr, args, info_set_cb, &cb_data);
-
-    // Check for no set
+    char *info;
+    int info_len;
+    set_cb_data cb_data = {handle->mgr, &info};
+    int res = setmgr_set_cb(handle->mgr, args[0], detail_set_cb, &cb_data);
     if (res != 0) {
         switch (res) {
             case -1:
@@ -608,19 +645,32 @@ static void handle_info_cmd(hlld_conn_handler *handle, char *args, int args_len)
         return;
     }
 
-    // Adjust the buffer size
-    lens[1] = strlen(output[1]);
+    info_len = strlen(info);
 
-    // Write out the bufs
-    send_client_response(handle->conn, (char**)&output, (int*)&lens, 3);
-    free(output[1]);
+    handle_string_resp(handle->conn, info, info_len);
+
+    free(info);
+}
+
+static void handle_info_cmd(hlld_conn_handler *handle, int args_count) {
+    if (args_count != 0) {
+        BAD_ARG_ERR();
+    }
+
+    const char *string = "role:master\r\n";
+    handle_string_resp(handle->conn, (char *)string, strlen(string));
 }
 
 
-static void handle_flush_cmd(hlld_conn_handler *handle, char *args, int args_len) {
+static void handle_flush_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+  if (handle && args && args_len && args_count) {
+    return;
+  }
+  return;
+  /*
     // If we have a specfic set, use filt_cmd
     if (args) {
-        handle_setop_cmd(handle, args, args_len, setmgr_flush_set);
+        handle_setop_cmd(handle, args, args_len, args_count, setmgr_flush_set);
         return;
     }
 
@@ -645,6 +695,7 @@ static void handle_flush_cmd(hlld_conn_handler *handle, char *args, int args_len
 
     // Cleanup
     setmgr_cleanup_list(head);
+  */
 }
 
 
@@ -678,6 +729,24 @@ static inline void handle_client_resp(hlld_conn_info *conn, char* resp_mesg, int
     char *buffers[] = {resp_mesg};
     int sizes[] = {resp_len};
     send_client_response(conn, (char**)&buffers, (int*)&sizes, 1);
+}
+
+/**
+ * Sends a string response message back. Simple convenience wrapper
+ * around send_client_resp.
+ */
+static inline void handle_string_resp(hlld_conn_info *conn, char* resp_mesg, int resp_len) {
+    char *start_resp;
+    int res = asprintf(&start_resp, "$%d\r\n", resp_len);
+    assert(res > 0);
+
+    // Create output buffers
+    char *output[] = {(char*)start_resp, resp_mesg, (char *) "\r\n"};
+    int lens[] = {(int) strlen(start_resp), resp_len, 2};
+
+    // Write out the bufs
+    send_client_response(conn, (char**)&output, (int*)&lens, 3);
+    free(start_resp);
 }
 
 
@@ -727,20 +796,24 @@ static conn_cmd_type determine_client_command(char *cmd) {
             if (CMD_MATCH("drop"))
                 type = DROP;
             break;
-
         case 'f':
             if (CMD_MATCH("flush"))
                 type = FLUSH;
             break;
-
-        case 'i':
+        */
+        case 'd': case 'D':
+            if (CMD_MATCH("detail"))
+                type = DETAIL;
+        case 'e': case 'E':
+            if (CMD_MATCH("echo"))
+                type = ECHO;
+            break;
+        case 'i': case 'I':
             if (CMD_MATCH("info"))
                 type = INFO;
-
+        case 'l': case 'L':
             if (CMD_MATCH("list"))
                 type = LIST;
-            break;
-        */
         case 's': case 'S':
             if (CMD_MATCH("shadd"))
                 type = SET_MULTI;
@@ -749,33 +822,4 @@ static conn_cmd_type determine_client_command(char *cmd) {
             break;
     }
     return type;
-}
-
-
-/**
- * Scans the input buffer of a given length up to a terminator.
- * Then sets the start of the buffer after the terminator including
- * the length of the after buffer.
- * @arg buf The input buffer
- * @arg buf_len The length of the input buffer
- * @arg terminator The terminator to scan to. Replaced with the null terminator.
- * @arg after_term Output. Set to the byte after the terminator.
- * @arg after_len Output. Set to the length of the output buffer.
- * @return 0 if terminator found. -1 otherwise.
- */
-static int buffer_after_terminator(char *buf, int buf_len, char terminator, char **after_term, int *after_len) {
-    // Scan for a space
-    char *term_addr = (char*)memchr(buf, terminator, buf_len);
-    if (!term_addr) {
-        *after_term = NULL;
-        return -1;
-    }
-
-    // Convert the space to a null-seperator
-    *term_addr = '\0';
-
-    // Provide the arg buffer, and arg_len
-    *after_term = term_addr+1;
-    *after_len = buf_len - (term_addr - buf + 1);
-    return 0;
 }

@@ -612,7 +612,7 @@ LEAVE:
  * @arg head Output, sets to the address of the list header
  * @return 0 on success.
  */
-int setmgr_list_sets(struct hlld_setmgr *mgr, char *prefix, struct hlld_set_list_head **head) {
+int setmgr_list_sets(struct hlld_setmgr *mgr, const char *prefix, struct hlld_set_list_head **head) {
     // Allocate the head
     struct hlld_set_list_head *h = *head = (struct hlld_set_list_head*)calloc(1, sizeof(struct hlld_set_list_head));
 

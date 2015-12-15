@@ -952,8 +952,19 @@ int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_ar
     // First we need to find the terminator...
     char *term_addr = NULL;
 
-    int read_cursor = conn->input.read_cursor;
+    // Skip any newlines at starts of commands
+    while (conn->input.read_cursor != conn->input.write_cursor) {
+      if (
+        (conn->input.buffer[conn->input.read_cursor] == '\r') ||
+        (conn->input.buffer[conn->input.read_cursor] == '\n')
+      ) {
+        conn->input.read_cursor = (conn->input.read_cursor + 1) % conn->input.buf_size;
+      } else {
+        break;
+      }
+    }
 
+    int read_cursor = conn->input.read_cursor;
     read_cursor = read_count(conn, '*', read_cursor, arg_count);
     if (read_cursor < 0) {
       return read_cursor;
