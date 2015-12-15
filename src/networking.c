@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <math.h>
+#include <ctype.h>
 #include "conn_handler.h"
 #include "spinlock.h"
 #include "barrier.h"
@@ -851,6 +852,77 @@ static int send_client_response_direct(conn_info *conn, char **response_buffers,
     return 0;
 }
 
+/**
+ * This method reads trailing newlines from the circular buffer
+ *
+ * @return New read cursor on success, -1 on failure
+ **/
+int read_trailing_newline(hlld_conn_info *conn, int read_cursor) {
+  if (conn->input.read_cursor == conn->input.write_cursor) {
+    return -1;
+  }
+  if (conn->input.buffer[read_cursor] == '\r') {
+    read_cursor = (read_cursor + 1) % conn->input.buf_size;
+  }
+
+  // check again if we exhausted the buffer
+  if (conn->input.read_cursor == conn->input.write_cursor) {
+    return -1;
+  }
+  if (conn->input.buffer[read_cursor] == '\n') {
+    return (read_cursor + 1) % conn->input.buf_size;
+  }
+  return -1;
+}
+
+
+/**
+ * This method reads a count from the circular read buffer
+ *
+ * @return New read cursor on success, -1 on failure
+ **/
+int read_count(hlld_conn_info *conn, char initial, int read_cursor, int *count) {
+  // Early exit if we're out of data (can't read initial char)
+  if (conn->input.read_cursor == conn->input.write_cursor) {
+    return -1;
+  }
+
+  // If the initial char is not correct, we should throw somehow. For now just
+  // return -1
+  if (conn->input.buffer[read_cursor] != initial) {
+    return -1;
+  }
+  read_cursor = (read_cursor + 1) % conn->input.buf_size;
+  
+  // If we're writing to an earlier part of the buffer, read the end
+  int result = 0;
+  while (conn->input.write_cursor < read_cursor) {
+    if (isdigit(conn->input.buffer[read_cursor])) {
+      result = (result * 10) + conn->input.buffer[read_cursor] - '0';
+    } else if (conn->input.buffer[read_cursor] == '\r' || conn->input.buffer[read_cursor] == '\n') {
+      *count = result;
+      return read_trailing_newline(conn, read_cursor);
+    } else {
+      return -1;
+    }
+    read_cursor = (read_cursor + 1) % conn->input.buf_size;
+  }
+
+  // Now read at most up to the write cursor
+  while (read_cursor < conn->input.write_cursor) {
+    if (isdigit(conn->input.buffer[read_cursor])) {
+      result = (result * 10) + conn->input.buffer[read_cursor] - '0';
+    } else if (conn->input.buffer[read_cursor] == '\r' || conn->input.buffer[read_cursor] == '\n') {
+      *count = result;
+      return read_trailing_newline(conn, read_cursor);
+    }
+    read_cursor++;
+  }
+
+  // If we did not find a full count, we can exit here
+  return -1;
+}
+
 
 /**
  * This method is used to conveniently extract commands from the
@@ -861,79 +933,93 @@ static int send_client_response_direct(conn_info *conn, char **response_buffers,
  * This method consumes the bytes from the underlying buffer, freeing
  * space for later reads.
  * @arg conn The client connection
- * @arg terminator The terminator charactor to look for. Replaced by null terminator.
  * @arg buf Output parameter, sets the start of the buffer.
  * @arg buf_len Output parameter, the length of the buffer.
- * @arg should_free Output parameter, should the buffer be freed by the caller.
+ * @arg arg_count Detected number of arguments, the length of the buffer.
+ * @arg free_command Output parameter, should a buffer be freed by the caller. -1 if none
  * @return 0 on success, -1 if the terminator is not found.
  */
-int extract_to_terminator(hlld_conn_info *conn, char terminator, char **buf, int *buf_len, int *should_free) {
+int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_args, int *arg_count, int *free_arg) {
     // First we need to find the terminator...
     char *term_addr = NULL;
-    if (conn->input.write_cursor < conn->input.read_cursor) {
-        /*
-         * We need to scan from the read cursor to the end of
-         * the buffer, and then from the start of the buffer to
-         * the write cursor.
-        */
-        term_addr = (char*)memchr(conn->input.buffer+conn->input.read_cursor,
-                           terminator,
-                           conn->input.buf_size - conn->input.read_cursor);
 
-        // If we've found the terminator, we can just move up
-        // the read cursor
-        if (term_addr) {
-            *buf = conn->input.buffer + conn->input.read_cursor;
-            *buf_len = term_addr - *buf + 1;    // Difference between the terminator and location
-            *term_addr = '\0';              // Add a null terminator
-            *should_free = 0;               // No need to free, in the buffer
-            conn->input.read_cursor = term_addr - conn->input.buffer + 1; // Push the read cursor forward
-            return 0;
-        }
+    int read_cursor = conn->input.read_cursor;
 
-        // Wrap around
-        term_addr = (char*)memchr(conn->input.buffer,
-                           terminator,
-                           conn->input.write_cursor);
+    read_cursor = read_count(conn, '*', read_cursor, arg_count);
 
-        // If we've found the terminator, we need to allocate
-        // a contiguous buffer large enough to store everything
-        // and provide a linear buffer
-        if (term_addr) {
-            int start_size = term_addr - conn->input.buffer + 1;
-            int end_size = conn->input.buf_size - conn->input.read_cursor;
-            *buf_len = start_size + end_size;
-            *buf = (char*)malloc(*buf_len);
-
-            // Copy from the read cursor to the end
-            memcpy(*buf, conn->input.buffer+conn->input.read_cursor, end_size);
-
-            // Copy from the start to the terminator
-            *term_addr = '\0';              // Add a null terminator
-            memcpy(*buf+end_size, conn->input.buffer, start_size);
-
-            *should_free = 1;               // Must free, not in the buffer
-            conn->input.read_cursor = start_size; // Push the read cursor forward
-        }
-
-    } else {
-        /*
-         * We need to scan from the read cursor to write buffer.
-         */
-        term_addr = (char*)memchr(conn->input.buffer+conn->input.read_cursor,
-                           terminator,
-                           conn->input.write_cursor - conn->input.read_cursor);
-
-        // If we've found the terminator, we can just move up
-        // the read cursor
-        if (term_addr) {
-            *buf = conn->input.buffer + conn->input.read_cursor;
-            *buf_len = term_addr - *buf + 1; // Difference between the terminator and location
-            *term_addr = '\0';               // Add a null terminator
-            *should_free = 0;                // No need to free, in the buffer
-            conn->input.read_cursor = term_addr - conn->input.buffer + 1; // Push the read cursor forward
-        }
+    if (read_cursor < 0) {
+      return -1;
     }
+
+    // @TODO: This should be a protocol error
+    if (*arg_count >= max_args) {
+      return -1;
+    }
+
+    int start_read_cursor = read_cursor;
+
+    // At the moment no argument wrapped around and needs to be free'd
+    int arg;
+    *free_arg = -1;
+
+    for (arg = 0; arg < *arg_count; arg++) {
+      read_cursor = read_count(conn, '$', read_cursor, &arg_lens[arg]);
+      if (read_cursor < 0) {
+        return -1;
+      }
+
+      args[arg] = conn->input.buffer + read_cursor;
+
+      // Jump forward through the entire argument, if we wrap around make sure
+      // not to bypass the write cursor
+      if (read_cursor > conn->input.write_cursor) {
+        read_cursor += arg_lens[arg];
+
+        if (read_cursor > conn->input.buf_size) {
+          read_cursor = read_cursor % conn->input.buf_size;
+
+          // If we do extract a command this argument will have to be malloc'ed
+          *free_arg = arg;
+
+          if (read_cursor > conn->input.write_cursor) {
+            return -1;
+          }
+        }
+      } else {
+        read_cursor += arg_lens[arg];
+        if (read_cursor > conn->input.write_cursor) {
+          return -1;
+        }
+      }
+
+      // Try read the trailing newline after the argument
+      read_cursor = read_trailing_newline(conn, read_cursor);
+      if (read_cursor < 0) {
+        return -1;
+      }
+    }
+    
+    // Okay! We have a complete command.
+
+    // If there was a command that wrapped around, allocate it seperately
+    if (*free_arg > 0) {
+      int start_size = (conn->input.buffer + conn->input.buf_size) - args[*free_arg];
+      int end_size = arg_lens[*free_arg] - start_size;
+
+      char *alloc_arg = (char*)malloc(start_size + end_size + 1);
+      memcpy(alloc_arg, args[*free_arg], end_size);
+      memcpy(alloc_arg + end_size, conn->input.buffer, start_size);
+
+      args[*free_arg] = alloc_arg;
+    }
+
+    // Null-terminate all the arguments
+    for (arg = 0; arg < *arg_count; arg++) {
+      args[arg][arg_lens[arg]] = '\0';
+    }
+
+    // Set the read cursor ready for the next command
+    conn->input.read_cursor = read_cursor;
 
     // Minor optimization, if our read-cursor has caught up
     // with the write cursor, reset them to the beginning
@@ -944,7 +1030,7 @@ int extract_to_terminator(hlld_conn_info *conn, char terminator, char **buf, int
     }
 
     // Return success if we have a term address
-    return ((term_addr) ? 0 : -1);
+    return 0;
 }
 
 

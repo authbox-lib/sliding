@@ -3,6 +3,7 @@
 #include <string.h>
 #include <regex.h>
 #include <assert.h>
+#include <ctype.h>
 #include "hll.h"
 #include "conn_handler.h"
 #include "convert.h"
@@ -18,29 +19,42 @@
 #define MULTI_OP_SIZE 32
 
 /**
+ * Maximum number of arguments in a single command
+ */
+#define MAX_ARGS 64
+
+/**
  * Invoked in any context with a hlld_conn_handler
  * to send out an INTERNAL_ERROR message to the client.
  */
 #define INTERNAL_ERROR() (handle_client_resp(handle->conn, (char*)INTERNAL_ERR, INTERNAL_ERR_LEN))
 
+/**
+ * Invoked to easily return with a bad argument error
+ */
+#define BAD_ARG_ERR() { \
+    handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN); \
+    return; \
+}
+
 /* Static method declarations */
-static void handle_set_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_set_multi_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_create_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_drop_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_close_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_clear_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_list_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_info_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_flush_cmd(hlld_conn_handler *handle, char *args, int args_len);
-static void handle_size_cmd(hlld_conn_handler *handle, char *args, int args_len);
+static void handle_set_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_create_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_drop_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_close_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_clear_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_list_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_info_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_flush_cmd(hlld_conn_handler *handle, char *args, int arg_count);
+static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 
 
 static inline void handle_set_cmd_resp(hlld_conn_handler *handle, int res);
 static inline void handle_client_resp(hlld_conn_info *conn, char* resp_mesg, int resp_len);
 static void handle_client_err(hlld_conn_info *conn, char* err_msg, int msg_len);
 
-static conn_cmd_type determine_client_command(char *cmd_buf, int buf_len, char **arg_buf, int *arg_len);
+static conn_cmd_type determine_client_command(char *cmd);
 
 static int buffer_after_terminator(char *buf, int buf_len, char terminator, char **after_term, int *after_len);
 
@@ -70,15 +84,23 @@ void init_conn_handler() {
  */
 int handle_client_connect(hlld_conn_handler *handle) {
     // Look for the next command line
-    char *buf, *arg_buf;
-    int buf_len, arg_buf_len, should_free;
+    int arg_count, free_arg;
+
+    char *args[MAX_ARGS];
+    int arg_lens[MAX_ARGS];
+
     int status;
     while (1) {
-        status = extract_to_terminator(handle->conn, '\n', &buf, &buf_len, &should_free);
+        status = extract_command(handle->conn, args, arg_lens, MAX_ARGS, &arg_count, &free_arg);
         if (status == -1) break; // Return if no command is available
 
         // Determine the command type
-        conn_cmd_type type = determine_client_command(buf, buf_len, &arg_buf, &arg_buf_len);
+        conn_cmd_type type;
+        if (arg_count > 0) {
+            type = determine_client_command(args[0]);
+        } else {
+            type = UNKNOWN;
+        }
 
         // For now only SET/SIZE are supported.
         if (type != SET_MULTI && type != SIZE) {
@@ -88,34 +110,34 @@ int handle_client_connect(hlld_conn_handler *handle) {
         // Handle an error or unknown response
         switch(type) {
             case SET:
-                handle_set_cmd(handle, arg_buf, arg_buf_len);
+                handle_set_cmd(handle, NULL, 0);
                 break;
             case SET_MULTI:
-                handle_set_multi_cmd(handle, arg_buf, arg_buf_len);
+                handle_set_multi_cmd(handle, args + 1, arg_lens + 1, arg_count - 1);
                 break;
             case CREATE:
-                handle_create_cmd(handle, arg_buf, arg_buf_len);
+                handle_create_cmd(handle, NULL, 0);
                 break;
             case DROP:
-                handle_drop_cmd(handle, arg_buf, arg_buf_len);
+                handle_drop_cmd(handle, NULL, 0);
                 break;
             case CLOSE:
-                handle_close_cmd(handle, arg_buf, arg_buf_len);
+                handle_close_cmd(handle, NULL, 0);
                 break;
             case CLEAR:
-                handle_clear_cmd(handle, arg_buf, arg_buf_len);
+                handle_clear_cmd(handle, NULL, 0);
                 break;
             case LIST:
-                handle_list_cmd(handle, arg_buf, arg_buf_len);
+                handle_list_cmd(handle, NULL, 0);
                 break;
             case INFO:
-                handle_info_cmd(handle, arg_buf, arg_buf_len);
+                handle_info_cmd(handle, NULL, 0);
                 break;
             case FLUSH:
-                handle_flush_cmd(handle, arg_buf, arg_buf_len);
+                handle_flush_cmd(handle, NULL, 0);
                 break;
             case SIZE:
-                handle_size_cmd(handle, arg_buf, arg_buf_len);
+                handle_size_cmd(handle, args + 1, arg_lens + 1, arg_count - 1);
                 break;
             default:
                 handle_client_err(handle->conn, (char*)&CMD_NOT_SUP, CMD_NOT_SUP_LEN);
@@ -123,7 +145,9 @@ int handle_client_connect(hlld_conn_handler *handle) {
         }
 
         // Make sure to free the command buffer if we need to
-        if (should_free) free(buf);
+        if (free_arg >= 0) {
+          free(args[free_arg]);
+        }
     }
 
     return 0;
@@ -180,52 +204,30 @@ static void handle_set_cmd(hlld_conn_handler *handle, char *args, int args_len) 
  * Internal method to handle a command that returns the estimated size
  * of a set given the sets key and the time window 
  */
-static void handle_size_cmd(hlld_conn_handler *handle, char *args, int args_len) {
-    // If we have no args, complain.
-    if (!args) {
-        handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
-        return;
-    }
-
-    char *key = args;
-
-    char *remaining;
-    int remaining_len;
+static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
     int err;
 
-    //  Fetch the timestamp out
+    // If we have no args, complain.
+    if (args_count != 3) BAD_ARG_ERR();
+    if (args_len[0] < 1) BAD_ARG_ERR();
+    if (args_len[1] < 1) BAD_ARG_ERR();
+    if (args_len[2] < 1) BAD_ARG_ERR();
+
+    // Interpret the timestamp
     uint64_t timestamp_64;
     time_t timestamp;
-
-    err = buffer_after_terminator(args, args_len, ' ', &remaining, &remaining_len);
-    if (err || remaining_len <= 1) {
-        handle_client_err(handle->conn, (char*)&WINDOW_NEEDED, WINDOW_NEEDED_LEN);
-        return;
-    }
-
-    err = value_to_int64(remaining, &timestamp_64);
-    if (err || timestamp_64 <= 0) {
-        handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
-        return;
-    }
+    err = value_to_int64(args[1], &timestamp_64);
+    if (err || timestamp_64 <= 0) BAD_ARG_ERR();
     timestamp = (time_t) timestamp_64;
 
     // Fetch the time window
     uint64_t time_window;
-    err = buffer_after_terminator(remaining, remaining_len, ' ', &remaining, &remaining_len);
-    if (err || remaining_len <= 1) {
-        handle_client_err(handle->conn, (char*)&WINDOW_NEEDED, WINDOW_NEEDED_LEN);
-        return;
-    }
+    err = value_to_int64(args[2], &time_window);
+    if (err || time_window <= 0) BAD_ARG_ERR();
 
-    err = value_to_int64(remaining, &time_window);
-    if (err || time_window <= 0) {
-        handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
-        return;
-    }
-
+    // Build up the estimate and return it
     uint64_t estimate;
-    err = setmgr_set_size(handle->mgr, key, &estimate, time_window, timestamp);
+    err = setmgr_set_size(handle->mgr, args[0], &estimate, time_window, timestamp);
     if (err) {
       INTERNAL_ERROR();
       return;
@@ -247,62 +249,50 @@ static void handle_size_cmd(hlld_conn_handler *handle, char *args, int args_len)
  * on a set name and multiple keys, responses are handled using
  * handle_multi_response.
  */
-static void handle_set_multi_cmd(hlld_conn_handler *handle, char *args, int args_len) {
+static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
     #define CHECK_ARG_ERR() { \
         handle_client_err(handle->conn, (char*)&SET_KEY_NEEDED, SET_KEY_NEEDED_LEN); \
         return; \
     }
-    // If we have no args, complain.
-    if (!args) CHECK_ARG_ERR();
 
-    // Setup the buffers
-    char *key_buf[MULTI_OP_SIZE];
-    char *key;
-    int key_len;
     int err;
 
-    // Scan for the timestamp
-    err = buffer_after_terminator(args, args_len, ' ', &key, &key_len);
-    if (err || key_len <= 1) CHECK_ARG_ERR();
+    // Extract the set name
+    if (args_count < 3) CHECK_ARG_ERR();
+    if (args_len[0] < 1) CHECK_ARG_ERR();
+    if (args_len[1] < 1) CHECK_ARG_ERR();
 
+    // Interpret the timestamp
     uint64_t timestamp_64;
     time_t timestamp;
-    err = value_to_int64(key, &timestamp_64);
+    err = value_to_int64(args[1], &timestamp_64);
     if (err || timestamp_64 <= 0) {
         handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
         return;
     }
-
     timestamp = (time_t) timestamp_64;
 
-    // Scan all the keys
-    err = buffer_after_terminator(key, key_len, ' ', &key, &key_len);
-    if (err || key_len <= 1) CHECK_ARG_ERR();
 
-    // Parse any options
-    char *curr_key = key;
+    // Scan all the keys
     int res = 0;
     int index = 0;
-    while (curr_key && *curr_key != '\0') {
-        // Adds a zero terminator to the current key, scans forward
-        buffer_after_terminator(key, key_len, ' ', &key, &key_len);
+    char *key_buf[MULTI_OP_SIZE];
+
+    for (int arg = 2; arg < args_count; arg++) {
+        if (err || args_len[arg] < 1) CHECK_ARG_ERR();
 
         // Set the key
-        key_buf[index] = curr_key;
-
-        // Advance to the next key
-        curr_key = key;
-        index++;
+        key_buf[index++] = args[arg];
 
         // If we have filled the buffer, check now
         if (index == MULTI_OP_SIZE) {
             // Handle the keys now
-            res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, index, timestamp);
+            res = setmgr_set_keys(handle->mgr, args[0], (char**)&key_buf, index, timestamp);
 
             // Automatically create the set if it doesn't exist
             if (res == -1 ) {
-                setmgr_create_set(handle->mgr, args, NULL);
-                res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, index, timestamp);
+                setmgr_create_set(handle->mgr, args[0], NULL);
+                res = setmgr_set_keys(handle->mgr, args[0], (char**)&key_buf, index, timestamp);
             }
 
             if (res) goto SEND_RESULT;
@@ -314,10 +304,10 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char *args, int args
 
     // Handle any remaining keys
     if (index) {
-        res = setmgr_set_keys(handle->mgr, args, key_buf, index, timestamp);
+        res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
         if (res == -1 ) {
-            setmgr_create_set(handle->mgr, args, NULL);
-            res = setmgr_set_keys(handle->mgr, args, key_buf, index, timestamp);
+            setmgr_create_set(handle->mgr, args[0], NULL);
+            res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
         }
     }
 
@@ -710,22 +700,11 @@ static void handle_client_err(hlld_conn_info *conn, char* err_msg, int msg_len) 
  * @return The conn_cmd_type enum value.
  * UNKNOWN if it doesn't match anything supported, or a proper command.
  */
-static conn_cmd_type determine_client_command(char *cmd_buf, int buf_len, char **arg_buf, int *arg_len) {
-    // Check if we are ending with \r, and remove it.
-    if (cmd_buf[buf_len-2] == '\r') {
-        cmd_buf[buf_len-2] = '\0';
-        buf_len -= 1;
-    }
-
-    // Scan for a space. This will setup the arg_buf and arg_len
-    // if we do find the terminator. It will also insert a null terminator
-    // at the space, so we can compare the cmd_buf to the commands.
-    buffer_after_terminator(cmd_buf, buf_len, ' ', arg_buf, arg_len);
-
+static conn_cmd_type determine_client_command(char *cmd) {
     // Search for the command
     conn_cmd_type type = UNKNOWN;
-    #define CMD_MATCH(name) (strcmp(name, cmd_buf) == 0)
-    switch (*cmd_buf) {
+    #define CMD_MATCH(name) (strcmp(name, cmd) == 0)
+    switch (*cmd) {
         case 'b':
             if (CMD_MATCH("b") || CMD_MATCH("bulk"))
                 type = SET_MULTI;
@@ -761,9 +740,9 @@ static conn_cmd_type determine_client_command(char *cmd_buf, int buf_len, char *
             break;
 
         case 's':
-            if (CMD_MATCH("s") || CMD_MATCH("set"))
-                type = SET;
-            else if (CMD_MATCH("size"))
+            if (CMD_MATCH("shadd"))
+                type = SET_MULTI;
+            else if (CMD_MATCH("shcard"))
                 type = SIZE;
             break;
     }
@@ -798,4 +777,3 @@ static int buffer_after_terminator(char *buf, int buf_len, char terminator, char
     *after_len = buf_len - (term_addr - buf + 1);
     return 0;
 }
-

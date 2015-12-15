@@ -66,9 +66,10 @@ int send_client_response(hlld_conn_info *conn, char **response_buffers, int *buf
  * @arg terminator The terminator charactor to look for. Included in buf.
  * @arg buf Output parameter, sets the start of the buffer.
  * @arg buf_len Output parameter, the length of the buffer.
+ * @arg arg_count Output parameter, the number of arguments.
  * @arg should_free Output parameter, should the buffer be freed by the caller.
  * @return 0 on success, -1 if the terminator is not found.
  */
-int extract_to_terminator(hlld_conn_info *conn, char terminator, char **buf, int *buf_len, int *should_free);
+int extract_command(hlld_conn_info *conn, char **args, int *arg_lens, int max_args, int *arg_count, int *free_arg);
 
 #endif
