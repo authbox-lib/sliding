@@ -21,7 +21,7 @@
 /**
  * Maximum number of arguments in a single command
  */
-#define MAX_ARGS 64
+#define MAX_ARGS 256
 
 /**
  * Invoked in any context with a hlld_conn_handler
@@ -703,8 +703,9 @@ static void handle_client_err(hlld_conn_info *conn, char* err_msg, int msg_len) 
 static conn_cmd_type determine_client_command(char *cmd) {
     // Search for the command
     conn_cmd_type type = UNKNOWN;
-    #define CMD_MATCH(name) (strcmp(name, cmd) == 0)
+    #define CMD_MATCH(name) (strcasecmp(name, cmd) == 0)
     switch (*cmd) {
+        /*
         case 'b':
             if (CMD_MATCH("b") || CMD_MATCH("bulk"))
                 type = SET_MULTI;
@@ -734,12 +735,11 @@ static conn_cmd_type determine_client_command(char *cmd) {
             if (CMD_MATCH("info"))
                 type = INFO;
 
-        case 'l':
             if (CMD_MATCH("list"))
                 type = LIST;
             break;
-
-        case 's':
+        */
+        case 's': case 'S':
             if (CMD_MATCH("shadd"))
                 type = SET_MULTI;
             else if (CMD_MATCH("shcard"))
