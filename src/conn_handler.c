@@ -307,7 +307,7 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *ar
     // Handle any remaining keys
     if (index) {
         res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
-        if (res == -1 ) {
+        if (res == -1) {
             setmgr_create_set(handle->mgr, args[0], NULL);
             res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
         }

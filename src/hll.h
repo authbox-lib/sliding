@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <time.h>
-#include "bitmap.h"
 
 #ifndef HLL_H
 #define HLL_H
@@ -55,15 +54,6 @@ typedef struct {
  * @arg h the SHLL to initialize
  */
 int hll_init(unsigned char precision, int window_period, int window_precision, hll_t *h);
-
-/**
- * Initializes a new HLL from a bitmap
- * @arg precision The digits of precision to use
- * @arg bm The bitmap to use
- * @arg h The HLL to initialize
- * @return 0 on success
- */
-int hll_init_from_bitmap(unsigned char precision, hlld_bitmap *bm, hll_t *h);
 
 /**
  * Destroys an hll. Closes the bitmap, but does not free it.

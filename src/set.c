@@ -285,8 +285,6 @@ uint64_t hset_size_union(struct hlld_set **sets, int num_sets, uint64_t time_win
  * @return The total byte size of the set
  */
 uint64_t hset_byte_size(struct hlld_set *set) {
-    if (set->bm.size)
-        return set->bm.size;
     return hll_bytes_for_precision(set->set_config.default_precision);
 }
 
@@ -328,7 +326,7 @@ static int thread_safe_fault(struct hlld_set *s) {
         //syslog(LOG_ERR, "Discovered HLL set: %s.", bitmap_path);
         res = unserialize_hll_from_filename(s->full_path, &s->hll);
         if (res) {
-            syslog(LOG_ERR, "Failed to load bitmap: %s. %s", s->full_path, strerror(errno));
+            syslog(LOG_ERR, "Failed to load hll: %s. %s", s->full_path, strerror(errno));
             goto LEAVE;
         }
 

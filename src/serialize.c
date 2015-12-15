@@ -257,6 +257,12 @@ int unserialize_hll_from_file(int fileno, uint64_t len, hll_t *h) {
     if (res != 0) {
         perror("Failed to unserialize hll");
     }
+
+    res = munmap(addr, len);
+    if (res != 0) {
+        perror("Failed to call munmap()");
+    }
+
     close(newfileno);
 
     return res;

@@ -33,7 +33,6 @@ struct hlld_set {
 
     char is_config_dirty;
     char is_dirty;                  // Has a write happened
-    hlld_bitmap bm;                 // Bitmap for the HLL
     hll_t hll;                      // Underlying HLL
     hlld_spinlock hll_update;       // Protect the updates
 
