@@ -44,16 +44,11 @@ int hll_init(unsigned char precision, int window_period, int window_precision, h
     }
 
     // Store parameters
-    h->representation = HLL_SPARSE;
     h->precision = precision;
     h->window_period = window_period;
     h->window_precision = window_precision;
 
-    h->sparse = (hll_sparse*)calloc(sizeof(hll_sparse), 1);
-    h->sparse->size = 0;
-    h->sparse->points = NULL;
-
-    h->dense_registers = NULL;
+    h->dense_registers = (hll_register*)calloc(NUM_REG(h->precision),sizeof(hll_register));
 
     return 0;
 }
@@ -64,22 +59,13 @@ int hll_init(unsigned char precision, int window_period, int window_precision, h
  * @return 0 on success
  */
 int hll_destroy(hll_t *h) {
-    if (h->representation == HLL_DENSE) {
-        for(int i=0; i<NUM_REG(h->precision); i++) {
-            if(h->dense_registers[i].points != NULL) {
-                free(h->dense_registers[i].points);
-            }
+    for(int i=0; i<NUM_REG(h->precision); i++) {
+        if(h->dense_registers[i].points != NULL) {
+            free(h->dense_registers[i].points);
         }
-        free(h->dense_registers);
-        h->dense_registers = NULL;
-    } else {
-        if (h->sparse->points != NULL) {
-            free(h->sparse->points);
-        }
-        h->sparse->points = NULL;
-        free(h->sparse);
-        h->sparse = NULL;
     }
+    free(h->dense_registers);
+    h->dense_registers = NULL;
     return 0;
 }
 
@@ -161,114 +147,31 @@ int hll_get_register(hll_t *h, int register_index, time_t time_length, time_t cu
     return register_value;
 }
 
-void hll_convert_dense(hll_t *h) {
-    // converting an already converted repr is a no-op
-    if (h->representation == HLL_DENSE)
-        return;
-    h->representation = HLL_DENSE;
-    assert(h->dense_registers == NULL);
-    h->dense_registers = (hll_register*)calloc(NUM_REG(h->precision),sizeof(hll_register));
-
-    for(int i=0; i<h->sparse->size; i++) {
-        hll_add_hash_at_time(h, h->sparse->points[i].hash, h->sparse->points[i].timestamp);
-    }
-    free(h->sparse->points);
-    free(h->sparse);
-    h->sparse = NULL;
-}
-
-void hll_sparse_remove_point(hll_t *h, size_t i) {
-    h->sparse->points[i] = h->sparse->points[h->sparse->size];
-    h->sparse->size--;
-    assert(h->sparse->size >= 0);
-}
-
-void hll_sparse_add_point(hll_t *h, uint64_t hash, time_t time_added) {
-    hll_sparse *sparse = h->sparse;
-    if (sparse->points == NULL || sparse->capacity == 0) {
-        sparse->capacity = 4;
-        sparse->size = 0;
-        sparse->points = (hll_sparse_point*)calloc(
-                sparse->capacity,
-                sizeof(hll_sparse_point));
-    }
-    
-    // remove all points with smaller register value or that have expired.
-    // it's the worst that this is duplicated code....
-    long long max_time = time_added - h->window_period/ h->window_precision;
-    // do this in reverse order because we remove points from the right end
-    for (int i=sparse->size-1; i>=0; i--) {
-        uint64_t other_hash = sparse->points[i].hash;
-        // if we are inserting the same value again just update timestamp
-        if (other_hash == hash) {
-            sparse->points[i].timestamp = time_added;
-            return;
-        }
-
-        // if the old register is too ooold
-        if (sparse->points[i].timestamp <= max_time) {
-            hll_sparse_remove_point(h, i);
-        }
-    }
-
-    if (sparse->size+1 >= h->sparse->capacity) {
-        while (sparse->size+1 >= sparse->capacity)
-            sparse->capacity = sparse->capacity*1.5+1;
-        assert(sparse->size+1<sparse->capacity);
-
-        // if increasing the capacity takes us over the limit convert to dense representation
-        const int max_size = NUM_REG(h->precision);
-        // convert to the dense representation
-        if (sparse->size > max_size) {
-            hll_convert_dense(h);
-            assert(h->representation == HLL_DENSE);
-            hll_add_hash_at_time(h, hash, time_added);
-            return;
-        }
-        // increase size of array
-        sparse->points = (hll_sparse_point*)realloc(
-                sparse->points,
-                sparse->capacity*sizeof(hll_sparse_point));
-    }
-    sparse->points[sparse->size].hash = hash;
-    sparse->points[sparse->size].timestamp = time_added;
-    sparse->size++;
-}
-
 /**
  * Adds a new hash to the SHLL
  * @arg h The hll to add to
  * @arg hash The hash to add
  */
 void hll_add_hash_at_time(hll_t *h, uint64_t hash, time_t time_added) {
-    if (h->representation == HLL_DENSE) {
-        // Determine the index using the first p bits
-        int idx = hash >> (64 - h->precision);
+    // Determine the index using the first p bits
+    int idx = hash >> (64 - h->precision);
 
-        // Shift out the index bits
-        hash = hash << h->precision | (1 << (h->precision -1));
+    // Shift out the index bits
+    hash = hash << h->precision | (1 << (h->precision -1));
 
-        // Determine the count of leading zeros
-        long leading = __builtin_clzll(hash) + 1;
+    // Determine the count of leading zeros
+    long leading = __builtin_clzll(hash) + 1;
 
-        hll_dense_point p = {time_added, leading};
-        hll_register *r = &h->dense_registers[idx];
+    hll_dense_point p = {time_added, leading};
+    hll_register *r = &h->dense_registers[idx];
 
-        hll_register_add_point(h, r, p);
-    } else {
-        hll_sparse_add_point(h, hash, time_added);
-    }
+    hll_register_add_point(h, r, p);
 }
 
 /*
  * Computes the raw cardinality estimate
  */
 static double hll_raw_estimate_union(hll_t **h, int num_hls, int *num_zero, time_t time_length, time_t current_time) {
-    // we can only take unions if either all representations are dense or all are sparse
-    // fornow lets convert everything to a dense representation
-    for(int i=0; i<num_hls; i++) {
-        hll_convert_dense(h[i]);
-    }
     unsigned char precision = h[0]->precision;
     int num_reg = NUM_REG(precision);
     double multi = hll_alpha(precision) * num_reg * num_reg;
@@ -286,6 +189,7 @@ static double hll_raw_estimate_union(hll_t **h, int num_hls, int *num_zero, time
     }
     return multi * (1.0 / inv_sum);
 }
+
 /*
  * Returns the bias correctors from the
  * hyperloglog paper
@@ -438,40 +342,29 @@ uint64_t hll_bytes_for_precision(int prec) {
  * @return An estimate of the cardinality
  */
 double hll_size(hll_t *h, time_t time_length, time_t current_time) {
-    if (h->representation == HLL_DENSE) {
-        int num_zero = 0;
-        hll_t *hs[] = {h};
-        double raw_est = hll_raw_estimate_union(hs, 1, &num_zero, time_length, current_time);
+    int num_zero = 0;
+    hll_t *hs[] = {h};
+    double raw_est = hll_raw_estimate_union(hs, 1, &num_zero, time_length, current_time);
 
-        // Check if we need to apply bias correction
-        int num_reg = NUM_REG(h->precision);
-        if (raw_est <= 5 * num_reg) {
-            raw_est -= hll_bias_estimate(h, raw_est);
-        }
+    // Check if we need to apply bias correction
+    int num_reg = NUM_REG(h->precision);
+    if (raw_est <= 5 * num_reg) {
+        raw_est -= hll_bias_estimate(h, raw_est);
+    }
 
-        // Check if linear counting should be used
-        double alt_est;
-        if (num_zero) {
-            alt_est = hll_linear_count(h, num_zero);
-        } else {
-            alt_est = raw_est;
-        }
-
-        // Determine which estimate to use
-        if (alt_est <= switchThreshold[h->precision-4]) {
-            return alt_est;
-        } else {
-            return raw_est;
-        }
+    // Check if linear counting should be used
+    double alt_est;
+    if (num_zero) {
+        alt_est = hll_linear_count(h, num_zero);
     } else {
-        double size = 0;
-        for(int i=0; i<h->sparse->size; i++) {
-            if (h->sparse->points[i].timestamp >= current_time - time_length &&
-                h->sparse->points[i].timestamp <= current_time) {
-                size++;
-            }
-        }
-        return size;
+        alt_est = raw_est;
+    }
+
+    // Determine which estimate to use
+    if (alt_est <= switchThreshold[h->precision-4]) {
+        return alt_est;
+    } else {
+        return raw_est;
     }
 }
 

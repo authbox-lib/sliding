@@ -24,6 +24,20 @@ struct hlld_set_list_head {
 };
 
 /**
+ * Defines the number of keys we set/check in a single
+ * iteration for our multi commands. We do not do all the
+ * keys at one time to prevent a client from holding locks
+ * for too long. This is especially critical for set
+ * operations which serialize access.
+ */
+#define MULTI_OP_SIZE 32
+
+/**
+ * Defines the number of keys before a hll is converted to the dense format.
+ */
+#define SPARSE_MAX_KEYS 16
+
+/**
  * Initializer
  * @arg config The configuration
  * @arg vacuum Should vacuuming be enabled. True unless in a
@@ -81,7 +95,7 @@ int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int nu
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, uint64_t time_window, time_t timestamp);
+int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time_t timestamp, uint64_t time_window);
 
 /**
  * Estimates the total size of a set
@@ -98,15 +112,6 @@ int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est
  * @return 0 on success, -1 if the set does not exist.
  */
 int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_names, uint64_t *est, uint64_t time_window);
-
-/**
- * Creates a new set of the given name and parameters.
- * @arg set_name The name of the set
- * @arg custom_config Optional, can be null. Configs that override the defaults.
- * @return 0 on success, -1 if the set already exists.
- * -2 for internal error.
- */
-int setmgr_create_set(struct hlld_setmgr *mgr, char *set_name, struct hlld_config *custom_config);
 
 /**
  * Deletes the set entirely. This removes it from the set

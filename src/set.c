@@ -60,7 +60,7 @@ int init_set(struct hlld_config *config, char *set_name, int discover, struct hl
     }
     subdir_name[prefix_dir_len] = 0;
 
-    s->full_path = join_path(config->data_dir, subdir_name);
+    s->full_path = join_path(config->dense_dir, subdir_name);
 
     // Try to create the folder path
     int res = mkdir(s->full_path, 0755);
@@ -216,11 +216,24 @@ int hset_delete(struct hlld_set *set) {
  * @arg key The key to add
  * @return 0 on success.
  */
-int hset_add(struct hlld_set *set, char *key, time_t time) {
+int hset_add_hash(struct hlld_set *set, uint64_t hash, time_t timestamp) {
     if (set->is_proxied) {
         if (thread_safe_fault(set) != 0) return -1;
     }
 
+    // Add the hashed value and update the
+    // counters
+    LOCK_HLLD_SPIN(&set->hll_update);
+    hll_add_hash_at_time(&set->hll, hash, timestamp);
+    set->counters.sets += 1;
+    UNLOCK_HLLD_SPIN(&set->hll_update);
+
+    // Mark as dirty
+    set->is_dirty = 1;
+    return 0;
+}
+
+int hset_add(struct hlld_set *set, char *key, time_t timestamp) {
     // Compute the hash value of the key. We do this
     // so that we can use the hll_add_hash instead of
     // hll_add. This way, the expensive CPU bit can
@@ -228,16 +241,7 @@ int hset_add(struct hlld_set *set, char *key, time_t time) {
     uint64_t out[2];
     MurmurHash3_x64_128(key, strlen(key), 0, &out);
 
-    // Add the hashed value and update the
-    // counters
-    LOCK_HLLD_SPIN(&set->hll_update);
-    hll_add_hash_at_time(&set->hll, out[1], time);
-    set->counters.sets += 1;
-    UNLOCK_HLLD_SPIN(&set->hll_update);
-
-    // Mark as dirty
-    set->is_dirty = 1;
-    return 0;
+    return hset_add_hash(set, out[1], timestamp);
 }
 
 /**

@@ -60,7 +60,6 @@ typedef enum {
     SET_MULTI,      // Set multiple space-seperated keys
     LIST,           // List sets
     INFO,           // Info about a set
-    CREATE,         // Creates a set
     DROP,           // Drop a set
     CLOSE,          // Close a set
     CLEAR,          // Clears a set from the internals

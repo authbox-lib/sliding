@@ -4,7 +4,6 @@
 #include "test_config.c"
 #include "test_hll.c"
 #include "test_shll.c"
-#include "test_bitmap.c"
 #include "test_set.c"
 #include "test_setmgr.c"
 #include "test_art.c"
@@ -16,18 +15,20 @@ int main(void)
     setlogmask(LOG_UPTO(LOG_DEBUG));
 
     Suite *s1 = suite_create("hlld");
+    /*
     TCase *tc1 = tcase_create("config");
-    TCase *tc3 = tcase_create("bitmap");
     TCase *tc4 = tcase_create("shll");
     TCase *tc5 = tcase_create("set");
-    TCase *tc6 = tcase_create("manager");
     TCase *tc7 = tcase_create("art");
     TCase *tc8 = tcase_create("hll");
     TCase *tc9 = tcase_create("serialize");
+    */
+    TCase *tc6 = tcase_create("manager");
     TCase *tc10 = tcase_create("sparse");
     SRunner *sr = srunner_create(s1);
     int nf;
 
+    /*
     // Add the config tests
     suite_add_tcase(s1, tc1);
     tcase_add_test(tc1, test_config_get_default);
@@ -51,18 +52,6 @@ int main(void)
     tcase_add_test(tc1, test_set_config_empty_file);
     tcase_add_test(tc1, test_set_config_basic_config);
     tcase_add_test(tc1, test_update_filename_from_set_config);
-
-    // Add the bitmap tests
-    suite_add_tcase(s1, tc3);
-    tcase_set_timeout(tc3, 3);
-    tcase_add_test(tc3, make_anonymous_bitmap);
-    tcase_add_test(tc3, make_bitmap_zero_size);
-    tcase_add_test(tc3, make_bitmap_bad_fileno);
-    tcase_add_test(tc3, make_bitmap_bad_fileno_persistent);
-    tcase_add_test(tc3, make_bitmap_nofile);
-    tcase_add_test(tc3, make_bitmap_nofile_persistent);
-    tcase_add_test(tc3, make_bitmap_nofile_create);
-    tcase_add_test(tc3, make_bitmap_nofile_create_persistent);
 
     // Add the hll tests
     suite_add_tcase(s1, tc4);
@@ -93,7 +82,8 @@ int main(void)
     tcase_add_test(tc5, test_set_add_in_mem);
     tcase_add_test(tc5, test_set_page_out);
 
-    // Add the filter tests
+    */
+    // Add the set manager tests
     suite_add_tcase(s1, tc6);
     tcase_set_timeout(tc6, 3);
     tcase_add_test(tc6, test_mgr_init_destroy);
@@ -116,9 +106,9 @@ int main(void)
     tcase_add_test(tc6, test_mgr_list_cold_no_sets);
     tcase_add_test(tc6, test_mgr_list_cold);
     tcase_add_test(tc6, test_mgr_unmap_in_mem);
-    tcase_add_test(tc6, test_mgr_create_custom_config);
     tcase_add_test(tc6, test_mgr_restore);
     tcase_add_test(tc6, test_mgr_callback);
+    /*
 
     // Add the art tests
     suite_add_tcase(s1, tc7);
@@ -149,8 +139,10 @@ int main(void)
     tcase_add_test(tc9, test_hll_serialize_sparse);
     tcase_add_test(tc9, test_hll_serialize_registers);
     tcase_add_test(tc9, test_serialize_register);
+    */
 
     suite_add_tcase(s1, tc10);
+    tcase_add_test(tc10, test_sparse_init_destroy);
     tcase_add_test(tc10, test_sparse_insert);
     tcase_add_test(tc10, test_sparse_convert);
 

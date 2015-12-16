@@ -10,18 +10,10 @@
 #define HLL_MIN_PRECISION 4      // 16 registers
 #define HLL_MAX_PRECISION 18     // 262,144 registers
 
-#define HLL_SPARSE 0
-#define HLL_DENSE 1
-
 typedef struct {
     time_t timestamp;
     long register_;
 } hll_dense_point;
-
-typedef struct {
-    time_t timestamp;
-    uint64_t hash;
-} hll_sparse_point;
 
 typedef struct {
     long size;
@@ -30,20 +22,12 @@ typedef struct {
 } hll_register;
 
 typedef struct {
-    int capacity;
-    int size;
-    hll_sparse_point *points;
-} hll_sparse;
-
-typedef struct {
-    unsigned char representation;
     unsigned char precision;
     // amount of seconds worth of samples we store (in seconds)
     int window_period;
     // precision to which we keep samples (in seconds)
     int window_precision;
     hll_register *dense_registers;
-    hll_sparse *sparse;
 } hll_t;
 
 /**

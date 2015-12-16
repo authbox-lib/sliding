@@ -10,15 +10,6 @@
 #include "handler_constants.c"
 
 /**
- * Defines the number of keys we set/check in a single
- * iteration for our multi commands. We do not do all the
- * keys at one time to prevent a client from holding locks
- * for too long. This is especially critical for set
- * operations which serialize access.
- */
-#define MULTI_OP_SIZE 32
-
-/**
  * Maximum number of arguments in a single command
  */
 #define MAX_ARGS 256
@@ -41,7 +32,6 @@
 static void handle_echo_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_set_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
-static void handle_create_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_drop_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_close_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_clear_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
@@ -117,9 +107,6 @@ int handle_client_connect(hlld_conn_handler *handle) {
                 break;
             case SET_MULTI:
                 handle_set_multi_cmd(handle, args + 1, args_len + 1, arg_count - 1);
-                break;
-            case CREATE:
-                handle_create_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case DROP:
                 handle_drop_cmd(handle, args + 1, args_len + 1, arg_count - 1);
@@ -215,12 +202,6 @@ static void handle_set_cmd(hlld_conn_handler *handle, char **args, int *args_len
     // Call into the set manager
     int res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, 1, timestamp);
 
-    // Automatically create the set if it doesn't exist
-    if (res == -1 ) {
-        setmgr_create_set(handle->mgr, args, NULL);
-        res = setmgr_set_keys(handle->mgr, args, (char**)&key_buf, 1, timestamp);
-    }
-
     // Generate the response
     handle_set_cmd_resp(handle, res);
   */
@@ -314,13 +295,6 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *ar
         if (index == MULTI_OP_SIZE) {
             // Handle the keys now
             res = setmgr_set_keys(handle->mgr, args[0], (char**)&key_buf, index, timestamp);
-
-            // Automatically create the set if it doesn't exist
-            if (res == -1 ) {
-                setmgr_create_set(handle->mgr, args[0], NULL);
-                res = setmgr_set_keys(handle->mgr, args[0], (char**)&key_buf, index, timestamp);
-            }
-
             if (res) goto SEND_RESULT;
 
             // Reset the index
@@ -331,127 +305,11 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *ar
     // Handle any remaining keys
     if (index) {
         res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
-        if (res == -1) {
-            setmgr_create_set(handle->mgr, args[0], NULL);
-            res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
-        }
     }
 
 SEND_RESULT:
     // Generate the response
     handle_set_cmd_resp(handle, res);
-}
-
-/**
- * Internal command used to handle set creation.
- */
-static void handle_create_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
-  if (handle && args && args_len && args_count) {
-    return;
-  }
-  return;
-  /*
-    // If we have no args, complain.
-    if (!args) {
-        handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
-        return;
-    }
-
-    // Scan for options after the set name
-    char *options;
-    int options_len;
-    int res = buffer_after_terminator(args, args_len, ' ', &options, &options_len);
-
-    // Verify the set name is valid
-    char *set_name = args;
-    if (regexec(&VALID_SET_NAMES_RE, set_name, 0, NULL, 0) != 0) {
-        handle_client_err(handle->conn, (char*)&BAD_SET_NAME, BAD_SET_NAME_LEN);
-        return;
-    }
-
-    // Parse the options
-    struct hlld_config *config = NULL;
-    int err = 0;
-    if (res == 0) {
-        // Make a new config store, copy the current
-        config = (struct hlld_config*)malloc(sizeof(hlld_config));
-        memcpy(config, handle->config, sizeof(struct hlld_config));
-
-        // Parse any options
-        char *param = options;
-        while (param) {
-            // Adds a zero terminator to the current param, scans forward
-            buffer_after_terminator(options, options_len, ' ', &options, &options_len);
-
-            // Check for the custom params
-            int match = 0;
-            if (sscanf(param, "precision=%u", &config->default_precision)) {
-                // Compute error given precision
-                config->default_eps = hll_error_for_precision(config->default_precision);
-                match = 1;
-            }
-            if (sscanf(param, "eps=%lf", &config->default_eps)) {
-                // Compute precision given error
-                config->default_precision = hll_precision_for_error(config->default_eps);
-
-                // Compute error given precision. This is kinda strange but it is done
-                // since its not possible to hit all epsilons perfectly, but we try to get
-                // the eps provided to be the upper bound. This value is the actual eps.
-                config->default_eps = hll_error_for_precision(config->default_precision);
-                match = 1;
-            }
-            match |= sscanf(param, "in_memory=%d", &config->in_memory);
-
-            // Check if there was no match
-            if (!match) {
-                err = 1;
-                handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
-                break;
-            }
-
-            // Advance to the next param
-            param = options;
-        }
-
-        // Validate the params
-        int invalid_config = 0;
-        invalid_config |= sane_default_precision(config->default_precision);
-        invalid_config |= sane_default_eps(config->default_eps);
-        invalid_config |= sane_in_memory(config->in_memory);
-
-        // Barf if the configs are bad
-        if (invalid_config) {
-            err = 1;
-            handle_client_err(handle->conn, (char*)&BAD_ARGS, BAD_ARGS_LEN);
-        }
-    }
-
-    // Clean up an leave on errors
-    if (err) {
-        if (config) free(config);
-        return;
-    }
-
-    // Create a new set
-    res = setmgr_create_set(handle->mgr, set_name, config);
-    switch (res) {
-        case 0:
-            handle_client_resp(handle->conn, (char*)DONE_RESP, DONE_RESP_LEN);
-            break;
-        case -1:
-            handle_client_resp(handle->conn, (char*)EXISTS_RESP, EXISTS_RESP_LEN);
-            if (config) free(config);
-            break;
-        case -3:
-            handle_client_resp(handle->conn, (char*)DELETE_IN_PROGRESS, DELETE_IN_PROGRESS_LEN);
-            if (config) free(config);
-            break;
-        default:
-            INTERNAL_ERROR();
-            if (config) free(config);
-            break;
-    }
-  */
 }
 
 
@@ -634,14 +492,7 @@ static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_
     set_cb_data cb_data = {handle->mgr, &info};
     int res = setmgr_set_cb(handle->mgr, args[0], detail_set_cb, &cb_data);
     if (res != 0) {
-        switch (res) {
-            case -1:
-                handle_client_resp(handle->conn, (char*)SET_NOT_EXIST, SET_NOT_EXIST_LEN);
-                break;
-            default:
-                INTERNAL_ERROR();
-                break;
-        }
+        INTERNAL_ERROR();
         return;
     }
 
@@ -708,9 +559,6 @@ static inline void handle_set_cmd_resp(hlld_conn_handler *handle, int res) {
         case 0:
             handle_client_resp(handle->conn, (char*)DONE_RESP, DONE_RESP_LEN);
             break;
-        case -1:
-            handle_client_resp(handle->conn, (char*)SET_NOT_EXIST, SET_NOT_EXIST_LEN);
-            break;
         case -2:
             handle_client_resp(handle->conn, (char*)SET_NOT_PROXIED, SET_NOT_PROXIED_LEN);
             break;
@@ -776,31 +624,6 @@ static conn_cmd_type determine_client_command(char *cmd) {
     conn_cmd_type type = UNKNOWN;
     #define CMD_MATCH(name) (strcasecmp(name, cmd) == 0)
     switch (*cmd) {
-        /*
-        case 'b':
-            if (CMD_MATCH("b") || CMD_MATCH("bulk"))
-                type = SET_MULTI;
-            break;
-
-        case 'c':
-            if (CMD_MATCH("create")) {
-                type = CREATE;
-            } else if (CMD_MATCH("close")) {
-                type = CLOSE;
-            } else if (CMD_MATCH("clear")) {
-                type = CLEAR;
-            }
-            break;
-
-        case 'd':
-            if (CMD_MATCH("drop"))
-                type = DROP;
-            break;
-        case 'f':
-            if (CMD_MATCH("flush"))
-                type = FLUSH;
-            break;
-        */
         case 'd': case 'D':
             if (CMD_MATCH("detail"))
                 type = DETAIL;

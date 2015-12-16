@@ -15,7 +15,7 @@ START_TEST(test_config_get_default)
     fail_unless(res == 0);
     fail_unless(config.tcp_port == 9007);
     fail_unless(config.udp_port == 4554);
-    fail_unless(strcmp(config.data_dir, "/tmp/hlld") == 0);
+    fail_unless(strcmp(config.dense_dir, "/tmp/hlld/dense") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
     fail_unless(config.syslog_log_level == LOG_INFO);
     fail_unless(config.default_eps == 0.01625);
@@ -37,7 +37,7 @@ START_TEST(test_config_bad_file)
     // Should get the defaults...
     fail_unless(config.tcp_port == 9007);
     fail_unless(config.udp_port == 4554);
-    fail_unless(strcmp(config.data_dir, "/tmp/hlld") == 0);
+    fail_unless(strcmp(config.dense_dir, "/tmp/hlld/dense") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
     fail_unless(config.syslog_log_level == LOG_INFO);
     fail_unless(config.default_eps == 0.01625);
@@ -63,7 +63,7 @@ START_TEST(test_config_empty_file)
     // Should get the defaults...
     fail_unless(config.tcp_port == 9007);
     fail_unless(config.udp_port == 4554);
-    fail_unless(strcmp(config.data_dir, "/tmp/hlld") == 0);
+    fail_unless(strcmp(config.dense_dir, "/tmp/hlld/dense") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
     fail_unless(config.syslog_log_level == LOG_INFO);
     fail_unless(config.default_eps == 0.01625);
@@ -88,7 +88,8 @@ flush_interval = 120\n\
 cold_interval = 12000\n\
 in_memory = 1\n\
 default_eps = 0.05\n\
-data_dir = /tmp/test\n\
+dense_dir = /tmp/test/dense\n\
+sparse_dir = /tmp/test/sparse\n\
 workers = 2\n\
 use_mmap = 1\n\
 log_level = INFO\n";
@@ -103,7 +104,8 @@ log_level = INFO\n";
     // Should get the config
     fail_unless(config.tcp_port == 10000);
     fail_unless(config.udp_port == 10001);
-    fail_unless(strcmp(config.data_dir, "/tmp/test") == 0);
+    fail_unless(strcmp(config.dense_dir, "/tmp/test/dense") == 0);
+    fail_unless(strcmp(config.sparse_dir, "/tmp/test/sparse") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
     fail_unless(config.default_eps - 0.045961941 < 0.0001, "EPS %f", config.default_eps);
     fail_unless(config.default_precision == 9, "PREC %d", config.default_precision);
@@ -127,7 +129,8 @@ flush_interval = 120\n\
 cold_interval = 12000\n\
 in_memory = 1\n\
 default_precision = 14\n\
-data_dir = /tmp/test\n\
+dense_dir = /tmp/test/dense\n\
+sparse_dir = /tmp/test/sparse\n\
 workers = 2\n\
 use_mmap = 1\n\
 log_level = INFO\n";
@@ -142,7 +145,8 @@ log_level = INFO\n";
     // Should get the config
     fail_unless(config.tcp_port == 10000);
     fail_unless(config.udp_port == 10001);
-    fail_unless(strcmp(config.data_dir, "/tmp/test") == 0);
+    fail_unless(strcmp(config.dense_dir, "/tmp/test/dense") == 0);
+    fail_unless(strcmp(config.sparse_dir, "/tmp/test/sparse") == 0);
     fail_unless(strcmp(config.log_level, "INFO") == 0);
     fail_unless(config.default_precision == 14, "PREC %d", config.default_precision);
     fail_unless(config.default_eps == .008125, "EPS %f", config.default_eps);

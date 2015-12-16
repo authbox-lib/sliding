@@ -10,7 +10,8 @@ struct hlld_config {
     int tcp_port;
     int udp_port;
     char *bind_address;
-    char *data_dir;
+    char *dense_dir;
+    char *sparse_dir;
     char *log_level;
     int syslog_log_level;
     double default_eps;
@@ -22,6 +23,7 @@ struct hlld_config {
     int use_mmap;
     int sliding_period;
     int sliding_precision;
+    int memtable_memory;
 };
 
 /**
