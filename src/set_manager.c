@@ -472,6 +472,8 @@ int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est
 int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_names, uint64_t *est, uint64_t time_window) {
     // union_size does not work with sparse sets
     assert(0);
+    // need to add timestamp
+    assert(0);
 
     // Get the set
     struct hlld_set_wrapper **set_wrappers = (struct hlld_set_wrapper**)malloc(sizeof(struct hlld_set_wrapper*)*num_sets);
@@ -512,6 +514,7 @@ int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_name
  * Estimates the size of a set in a given time window
  * @arg set_name The name of the set
  * @arg est Output pointer, the estimate on success.
+ * @arg timestamp
  * @arg time_window Time window we query over
  * @return 0 on success
  */
@@ -537,7 +540,7 @@ int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time
     pthread_rwlock_rdlock(&set->rwlock);
 
     // Get the size
-    *est = hset_size(set->set, time_window, timestamp);
+    *est = hset_size(set->set, timestamp,  time_window);
 
     // Release the lock
     pthread_rwlock_unlock(&set->rwlock);

@@ -29,6 +29,7 @@ START_TEST(test_sparse_init_destroy)
 }
 END_TEST
 START_TEST(test_sparse_insert) {
+    const char *key = "test_sparse_insert";
     hlld_config config;
     int res = config_from_filename(NULL, &config);
     fail_unless(res == 0);
@@ -40,34 +41,34 @@ START_TEST(test_sparse_insert) {
 
     uint64_t hashes[] = {123, 456, 789};
     fail_unless(sparse_add(
-        sparsedb, "abc", 3,
+        sparsedb, key, strlen(key),
         hashes, 1,
         10
     ) == 1);
 
     // Make sure it's visible from within the time window
-    fail_unless(sparse_size(sparsedb, "abc", 3, 15, 5) == 1);
-    fail_unless(sparse_size(sparsedb, "abc", 3, 20, 5) == 0);
-    fail_unless(sparse_size(sparsedb, "abc", 3, 20, 10) == 1);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 15, 5) == 1);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 20, 5) == 0);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 20, 10) == 1);
 
     // Bump up the time window and make sure it's visible
     fail_unless(sparse_add(
-        sparsedb, "abc", 3,
+        sparsedb, key, strlen(key),
         hashes, 1,
         15
     ) == 1);
 
-    fail_unless(sparse_size(sparsedb, "abc", 3, 20, 5) == 1);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 20, 5) == 1);
 
     // Add the other two values a bit later
     fail_unless(sparse_add(
-        sparsedb, "abc", 3,
+        sparsedb, key, strlen(key),
         hashes + 1, 2,
         20
     ) == 3);
 
-    fail_unless(sparse_size(sparsedb, "abc", 3, 25, 5) == 2);
-    fail_unless(sparse_size(sparsedb, "abc", 3, 25, 10) == 3);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 25, 5) == 2);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 25, 10) == 3);
 
     // Cleanup
     res = destroy_sparse(sparsedb);
@@ -76,6 +77,7 @@ START_TEST(test_sparse_insert) {
 END_TEST
 
 START_TEST(test_sparse_convert) {
+    const char *key = "test_sparse_convert";
     hlld_config config;
     int res = config_from_filename(NULL, &config);
     fail_unless(res == 0);
@@ -91,27 +93,27 @@ START_TEST(test_sparse_convert) {
       2187992749178668892,
     };
     fail_unless(sparse_add(
-        sparsedb, "def", 3,
+        sparsedb, key, strlen(key),
         hashes, 3,
         10
     ) == 3);
     fail_unless(sparse_add(
-        sparsedb, "def", 3,
+        sparsedb, key, strlen(key),
         hashes, 1,
         30
     ) == 3);
 
-    fail_unless(sparse_size(sparsedb, "def", 3, 30, 10) == 1);
-    fail_unless(sparse_size(sparsedb, "def", 3, 30, 30) == 3);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 30, 10) == 1);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 30, 30) == 3);
 
     hll_t h;
     fail_unless(hll_init(12, 100, 1, &h) == 0);
     fail_unless(sparse_convert_dense(
-        sparsedb, "def", 3,
+        sparsedb, key, strlen(key),
         &h
     ) == 0);
 
-    fail_unless(sparse_size(sparsedb, "def", 3, 30, 30) == HLL_IS_DENSE);
+    fail_unless(sparse_size(sparsedb, key, strlen(key), 30, 30) == HLL_IS_DENSE);
 
     double est_f = hll_size_total(&h);
     fail_unless(est_f > 2.99 && est_f < 3.01);

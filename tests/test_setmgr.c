@@ -47,9 +47,7 @@ START_TEST(test_mgr_create_drop)
     res = setmgr_set_keys(mgr, (char*)"foo1", sample_keys, 1, time(NULL));
     fail_unless(res == 0);
 
-    printf("try drop\n");
     res = setmgr_drop_set(mgr, (char*)"foo1");
-    printf("drop said %d\n", res);
     fail_unless(res == 0);
 
     res = destroy_set_manager(mgr);

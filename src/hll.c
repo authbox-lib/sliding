@@ -132,10 +132,10 @@ void hll_register_add_point(hll_t *h, hll_register *r, hll_dense_point p) {
     r->points[r->size-1] = p;
 }
 
-int hll_get_register(hll_t *h, int register_index, time_t time_length, time_t current_time) {
+int hll_get_register(hll_t *h, int register_index, time_t timestamp, time_t time_window) {
     hll_register *r = &h->dense_registers[register_index];
 
-    time_t min_time = current_time - time_length/h->window_precision;
+    time_t min_time = timestamp - time_window/h->window_precision;
     int register_value = 0;
 
     for(int i=0; i<r->size; i++) {
@@ -171,7 +171,7 @@ void hll_add_hash_at_time(hll_t *h, uint64_t hash, time_t time_added) {
 /*
  * Computes the raw cardinality estimate
  */
-static double hll_raw_estimate_union(hll_t **h, int num_hls, int *num_zero, time_t time_length, time_t current_time) {
+static double hll_raw_estimate_union(hll_t **h, int num_hls, int *num_zero, time_t timestamp, time_t time_window) {
     unsigned char precision = h[0]->precision;
     int num_reg = NUM_REG(precision);
     double multi = hll_alpha(precision) * num_reg * num_reg;
@@ -180,7 +180,7 @@ static double hll_raw_estimate_union(hll_t **h, int num_hls, int *num_zero, time
     for (int i=0; i < num_reg; i++) {
         int reg_val = 0;
         for(int j=0; j<num_hls; j++) {
-            int reg = hll_get_register(h[j], i, time_length, current_time);
+            int reg = hll_get_register(h[j], i, timestamp,  time_window);
             if (reg > reg_val)
                 reg_val = reg;
         }
@@ -341,10 +341,10 @@ uint64_t hll_bytes_for_precision(int prec) {
  * @arg h The hll to query
  * @return An estimate of the cardinality
  */
-double hll_size(hll_t *h, time_t time_length, time_t current_time) {
+double hll_size(hll_t *h, time_t timestamp, time_t time_window) {
     int num_zero = 0;
     hll_t *hs[] = {h};
-    double raw_est = hll_raw_estimate_union(hs, 1, &num_zero, time_length, current_time);
+    double raw_est = hll_raw_estimate_union(hs, 1, &num_zero, timestamp,  time_window);
 
     // Check if we need to apply bias correction
     int num_reg = NUM_REG(h->precision);
@@ -379,7 +379,7 @@ double hll_size_total(hll_t *h) {
  *
  * returns -1 when the precision of all the hll's do not match
  */
-double hll_union_size(hll_t **hs, int num_hs, time_t time_length, time_t current_time) {
+double hll_union_size(hll_t **hs, int num_hs, time_t timestamp, time_t time_window) {
     // the precision of each hll needs to be the same
     int precision = (int)hs[0]->precision;
     for(int i=1; i<num_hs; i++) {
@@ -388,7 +388,7 @@ double hll_union_size(hll_t **hs, int num_hs, time_t time_length, time_t current
         }
     }
     int num_zero = 0;
-    double raw_est = hll_raw_estimate_union(hs, num_hs, &num_zero, time_length, current_time);
+    double raw_est = hll_raw_estimate_union(hs, num_hs, &num_zero, timestamp,  time_window);
 
     // Check if we need to apply bias correction
     int num_reg = NUM_REG(hs[0]->precision);

@@ -234,7 +234,7 @@ static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_le
 
     // Build up the estimate and return it
     uint64_t estimate;
-    err = setmgr_set_size(handle->mgr, args[0], &estimate, time_window, timestamp);
+    err = setmgr_set_size(handle->mgr, args[0], &estimate, timestamp,  time_window);
     if (err) {
       INTERNAL_ERROR();
       return;

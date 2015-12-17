@@ -257,11 +257,11 @@ uint64_t hset_size_total(struct hlld_set *set) {
     return hll_size_total(&set->hll);
 }
 
-uint64_t hset_size(struct hlld_set *set, uint64_t time_window, time_t current_time) {
+uint64_t hset_size(struct hlld_set *set, time_t timestamp, uint64_t time_window) {
     if (set->is_proxied) {
         if (thread_safe_fault(set) != 0) return -1;
     }
-    return hll_size(&set->hll, (int)time_window, current_time);
+    return hll_size(&set->hll, timestamp, (int)time_window);
 }
 
 /**
@@ -269,15 +269,15 @@ uint64_t hset_size(struct hlld_set *set, uint64_t time_window, time_t current_ti
  * @arg sets num_sets number of sets that we take the union of
  * @arg num_sets number of sets we're taking the union of
  * @arg time_window the amount of time we're counting
- * @arg current_time the current time
+ * @arg timestamp the current time
  */
-uint64_t hset_size_union(struct hlld_set **sets, int num_sets, uint64_t time_window, time_t current_time) {
+uint64_t hset_size_union(struct hlld_set **sets, int num_sets, time_t timestamp, uint64_t time_window) {
     printf("querying union size\n");
     hll_t **hlls = (hll_t **)malloc(sizeof(hll_t)*num_sets);
     for(int i=0; i<num_sets; i++) {
         hlls[i] = &sets[i]->hll;
     }
-    uint64_t result = hll_union_size(hlls, num_sets, (int)time_window, current_time);
+    uint64_t result = hll_union_size(hlls, num_sets, timestamp,  (int)time_window);
     free(hlls);
     return result;
 }

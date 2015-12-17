@@ -108,19 +108,21 @@ int hset_add_hash(struct hlld_set *set, uint64_t hash, time_t timestamp);
  * Gets the size of the set
  * @note Thread safe.
  * @arg set The set to check
+ * @arg timestamp the current time
+ * @arg time_window the amount of time we're counting
  * @return The estimated size of the set
  */
-uint64_t hset_size(struct hlld_set *set, uint64_t time_window, time_t current_time);
+uint64_t hset_size(struct hlld_set *set, time_t timestamp, uint64_t time_window);
 uint64_t hset_size_total(struct hlld_set *set);
 
 /**
  * Gets the size of the union of a few sets
  * @arg sets num_sets number of sets that we take the union of
  * @arg num_sets number of sets we're taking the union of
+ * @arg timestamp the current time
  * @arg time_window the amount of time we're counting
- * @arg current_time the current time
  */
-uint64_t hset_size_union(struct hlld_set **sets, int num_sets, uint64_t time_window, time_t current_time);
+uint64_t hset_size_union(struct hlld_set **sets, int num_sets, time_t timestamp, uint64_t time_window);
 
 /**
  * Gets the byte size of the set

@@ -64,13 +64,13 @@ void hll_add_hash_at_time(hll_t *h, uint64_t hash, time_t time);
  * @arg h The hll to query
  * @return An estimate of the cardinality
  */
-double hll_size(hll_t *h, time_t time_length, time_t current_time);
+double hll_size(hll_t *h, time_t timestamp, time_t time_window);
 double hll_size_total(hll_t *h);
 
 /**
  * Takes the union of a few sets and returns the cardinality
  */
-double hll_union_size(hll_t **hs, int num_hs, time_t time_length, time_t current_time);
+double hll_union_size(hll_t **hs, int num_hs, time_t timestamp, time_t time_window);
 
 /**
  * Computes the minimum digits of precision
@@ -130,7 +130,7 @@ double hll_bias_estimate(hll_t *hu, double raw_est);
  */
 void hll_register_add_point(hll_t *h, hll_register *r, hll_dense_point p);
 
-int hll_get_register(hll_t *h, int register_index, time_t time_length, time_t current_time);
+int hll_get_register(hll_t *h, int register_index, time_t timestamp, time_t time_window);
 
 void hll_convert_dense(hll_t *h);
 
