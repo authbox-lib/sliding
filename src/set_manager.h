@@ -13,7 +13,7 @@ typedef struct hlld_setmgr hlld_setmgr;
  * Lists of sets
  */
 struct hlld_set_list {
-    char *set_name;
+    char *full_key;
     struct hlld_set_list *next;
 };
 
@@ -35,7 +35,7 @@ struct hlld_set_list_head {
 /**
  * Defines the number of keys before a hll is converted to the dense format.
  */
-#define SPARSE_MAX_KEYS 16
+#define SPARSE_MAX_VALUES 16
 
 /**
  * Initializer
@@ -53,6 +53,13 @@ int init_set_manager(struct hlld_config *config, int vacuum, struct hlld_setmgr 
  * @return 0 on success.
  */
 int destroy_set_manager(struct hlld_setmgr *mgr);
+
+/**
+ * Fetch statistics
+ * @arg mgr The manager
+ * @return malloc'de string of human readable stats
+ */
+char *setmgr_get_stats(struct hlld_setmgr *mgr);
 
 /**
  * Should be invoked periodically by client threads to allow
@@ -77,7 +84,7 @@ void setmgr_client_leave(struct hlld_setmgr *mgr);
  * @arg set_name The name of the set to flush
  * @return 0 on success. -1 if the set does not exist.
  */
-int setmgr_flush_set(struct hlld_setmgr *mgr, char *set_name);
+int setmgr_flush_dense_set(struct hlld_setmgr *mgr, char *set_name);
 
 /**
  * Sets keys in a given set
@@ -87,7 +94,7 @@ int setmgr_flush_set(struct hlld_setmgr *mgr, char *set_name);
  * @return 0 on success, -1 if the set does not exist.
  * -2 on internal error.
  */
-int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int num_keys, time_t time);
+int setmgr_set_keys(struct hlld_setmgr *mgr, char *full_key, int full_key_len, char **keys, int num_keys, time_t time);
 
 /**
  * Estimates the size of a set
@@ -95,7 +102,7 @@ int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int nu
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time_t timestamp, uint64_t time_window);
+int setmgr_set_size(struct hlld_setmgr *mgr, char *full_key, int full_key_len, uint64_t *est, time_t timestamp, uint64_t time_window);
 
 /**
  * Estimates the total size of a set
@@ -103,7 +110,8 @@ int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est);
+int setmgr_set_size_total(struct hlld_setmgr *mgr, char *full_key, int full_key_len, uint64_t *est);
+int setmgr_dense_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est);
 
 /**
  * Estimates the size of the union of the sets
@@ -111,7 +119,7 @@ int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_names, uint64_t *est, uint64_t time_window);
+int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **full_keys, int *full_key_lens, uint64_t *est, uint64_t time_window);
 
 /**
  * Deletes the set entirely. This removes it from the set
@@ -119,7 +127,7 @@ int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_name
  * @arg set_name The name of the set to delete
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_drop_set(struct hlld_setmgr *mgr, char *set_name);
+int setmgr_drop_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len);
 
 /**
  * Unmaps the set from memory, but leaves it
@@ -130,7 +138,7 @@ int setmgr_drop_set(struct hlld_setmgr *mgr, char *set_name);
  * @arg set_name The name of the set to delete
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_unmap_set(struct hlld_setmgr *mgr, char *set_name);
+int setmgr_unmap_dense_set(struct hlld_setmgr *mgr, char *set_name);
 
 /**
  * Clears the set from the internal data stores. This can only
@@ -139,7 +147,7 @@ int setmgr_unmap_set(struct hlld_setmgr *mgr, char *set_name);
  * @return 0 on success, -1 if the set does not exist, -2
  * if the set is not proxied.
  */
-int setmgr_clear_set(struct hlld_setmgr *mgr, char *set_name);
+int setmgr_clear_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len);
 
 /**
  * Allocates space for and returns a linked
@@ -176,8 +184,9 @@ void setmgr_cleanup_list(struct hlld_set_list_head *head);
  * It should be used to read metrics, size information, etc.
  * @return 0 on success, -1 if the set does not exist.
  */
-typedef void(*set_cb)(void* in, char *set_name, struct hlld_set *set);
-int setmgr_set_cb(struct hlld_setmgr *mgr, char *set_name, set_cb cb, void* data);
+typedef int(*set_cb)(void* in, char *full_key,  struct hlld_set *set);
+int setmgr_dense_set_cb(struct hlld_setmgr *mgr, char *full_key, int full_key_len, set_cb cb, void* data);
+int setmgr_set_cb(struct hlld_setmgr *mgr, char *full_key, set_cb cb, void* data);
 
 /**
  * This method is used to force a vacuum up to the current
@@ -185,7 +194,5 @@ int setmgr_set_cb(struct hlld_setmgr *mgr, char *set_name, set_cb cb, void* data
  * but can be used in an embeded or test environment.
  */
 void setmgr_vacuum(struct hlld_setmgr *mgr);
-
-struct hlld_set* setmgr_get_set(struct hlld_setmgr *mgr, char *set_name);
 
 #endif

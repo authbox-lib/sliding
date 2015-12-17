@@ -15,7 +15,7 @@ START_TEST(test_shll_add_register)
     fail_unless(hll_init(10, 100, 1, &h) == 0);
     hll_dense_point p = {100, 3};
     fail_unless(h.precision == 10);
-    hll_register_add_point(&h, &h.dense_registers[0], p);
+    hll_register_add_point(&h.dense_registers[0], p);
     fail_unless(h.dense_registers[0].size == 1);
 
     fail_unless(hll_destroy(&h) == 0);
@@ -33,7 +33,7 @@ START_TEST(test_shll_remove_smaller)
     hll_register *r = &h.dense_registers[0];
     for(int i=0; i<num_points; i++) {
         hll_dense_point p = {100, points_leading_value[i]};
-        hll_register_add_point(&h, r, p);
+        hll_register_add_point(r, p);
         fail_unless(r->size == expected_size[i]);
     }
 
@@ -52,7 +52,7 @@ START_TEST(test_shll_remove_time)
     hll_register *r = &h.dense_registers[0];
     for(int i=0; i<num_points; i++) {
         hll_dense_point p = {points_time[i], num_points-i};
-        hll_register_add_point(&h, r, p);
+        hll_register_add_point(r, p);
         fail_unless(r->size == expected_size[i]);
     }
 
@@ -82,12 +82,12 @@ START_TEST(test_shll_shrink_register)
     // add 100 points
     for(int i=0; i<100; i++) {
         hll_dense_point p = {0, 100-i};
-        hll_register_add_point(&h, r, p);
+        hll_register_add_point(r, p);
         fail_unless(r->size == i+1);
     }
     // remove all points
     hll_dense_point p = {200, 1};
-    hll_register_add_point(&h, r, p);
+    hll_register_add_point(r, p);
     fail_unless(r->size == 1);
     // check that capacity was reduced appropriately
     fail_unless(r->size*1.5*1.5+1 >= r->capacity);
@@ -95,7 +95,7 @@ START_TEST(test_shll_shrink_register)
     // add all back and check bounds on capacity
     for(int i=0; i<100; i++) {
         hll_dense_point p = {200, 100-i};
-        hll_register_add_point(&h, r, p);
+        hll_register_add_point(r, p);
         fail_unless(r->size == i+1);
         // check that capacity is bounded
         fail_unless(r->size*1.5*1.5+1 >= r->capacity);

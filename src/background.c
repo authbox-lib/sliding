@@ -133,7 +133,7 @@ static void* flush_thread_main(void *in) {
             struct hlld_set_list *node = head->head;
             unsigned int cmds = 0;
             while (node) {
-                setmgr_flush_set(mgr, node->set_name);
+                setmgr_flush_dense_set(mgr, node->full_key);
                 if (!(++cmds % PERIODIC_CHECKPOINT)) setmgr_client_checkpoint(mgr);
                 node = node->next;
             }
@@ -180,8 +180,8 @@ static void* unmap_thread_main(void *in) {
             struct hlld_set_list *node = head->head;
             unsigned int cmds = 0;
             while (node) {
-                syslog(LOG_DEBUG, "Unmapping set '%s' for being cold.", node->set_name);
-                setmgr_unmap_set(mgr, node->set_name);
+                syslog(LOG_DEBUG, "Unmapping set '%s' for being cold.", node->full_key);
+                setmgr_unmap_dense_set(mgr, node->full_key);
                 if (!(++cmds % PERIODIC_CHECKPOINT)) setmgr_client_checkpoint(mgr);
                 node = node->next;
             }

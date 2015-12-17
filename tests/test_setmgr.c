@@ -44,10 +44,10 @@ START_TEST(test_mgr_create_drop)
     res = init_set_manager(&config, 0, &mgr);
     fail_unless(res == 0);
 
-    res = setmgr_set_keys(mgr, (char*)"foo1", sample_keys, 1, time(NULL));
+    res = setmgr_set_keys(mgr, (char*)"foo1", 4, sample_keys, 1, time(NULL));
     fail_unless(res == 0);
 
-    res = setmgr_drop_set(mgr, (char*)"foo1");
+    res = setmgr_drop_set(mgr, (char*)"foo1", 4);
     fail_unless(res == 0);
 
     res = destroy_set_manager(mgr);
@@ -65,13 +65,13 @@ START_TEST(test_mgr_create_double_drop)
     res = init_set_manager(&config, 0, &mgr);
     fail_unless(res == 0);
 
-    res = setmgr_set_keys(mgr, (char*)"dub1", sample_keys, 1, time(NULL));
+    res = setmgr_set_keys(mgr, (char*)"dub1", 4, sample_keys, 1, time(NULL));
     fail_unless(res == 0);
 
-    res = setmgr_drop_set(mgr, (char*)"dub1");
+    res = setmgr_drop_set(mgr, (char*)"dub1", 4);
     fail_unless(res == 0);
 
-    res = setmgr_drop_set(mgr, (char*)"dub1");
+    res = setmgr_drop_set(mgr, (char*)"dub1", 4);
     fail_unless(res == -1);
 
     res = destroy_set_manager(mgr);
@@ -215,10 +215,10 @@ START_TEST(test_mgr_add_keys)
     fail_unless(res == 0);
 
     char *keys[] = {(char*)"hey",(char*)"there",(char*)"person"};
-    res = setmgr_set_keys(mgr, (char*)"zab1", (char**)&keys, 3, time(NULL));
+    res = setmgr_set_keys(mgr, (char*)"zab1", 4, (char**)&keys, 3, time(NULL));
     fail_unless(res == 0);
 
-    res = setmgr_drop_set(mgr, (char*)"zab1");
+    res = setmgr_drop_set(mgr, (char*)"zab1", 4);
     fail_unless(res == 0);
 
     res = destroy_set_manager(mgr);
@@ -237,13 +237,13 @@ START_TEST(test_mgr_add_no_set)
     fail_unless(res == 0);
 
     char *keys[] = {(char*)"hey",(char*)"there",(char*)"person"};
-    res = setmgr_set_keys(mgr, (char*)"noop1", (char**)&keys, 3, time(NULL));
+    res = setmgr_set_keys(mgr, (char*)"noop1", 5, (char**)&keys, 3, time(NULL));
     fail_unless(res == 0);
 
-    res = setmgr_drop_set(mgr, (char*)"noop1");
+    res = setmgr_drop_set(mgr, (char*)"noop1", 5);
     fail_unless(res == 0);
 
-    res = setmgr_drop_set(mgr, (char*)"noop1");
+    res = setmgr_drop_set(mgr, (char*)"noop1", 5);
     fail_unless(res == -1);
 
     res = destroy_set_manager(mgr);
@@ -387,7 +387,7 @@ START_TEST(test_mgr_clear_no_set)
     res = init_set_manager(&config, 0, &mgr);
     fail_unless(res == 0);
 
-    res = setmgr_clear_set(mgr, (char*)"noop2");
+    res = setmgr_clear_set(mgr, (char*)"noop2", 5);
     fail_unless(res == -1);
 
     res = destroy_set_manager(mgr);
@@ -641,7 +641,7 @@ START_TEST(test_mgr_restore)
     fail_unless(res == 0);
 
     char *keys[] = {(char*)"hey",(char*)"there",(char*)"person"};
-    res = setmgr_set_keys(mgr, (char*)"zab8", (char**)&keys, 3, time(NULL));
+    res = setmgr_set_keys(mgr, (char*)"zab8", 4, (char**)&keys, 3, time(NULL));
     fail_unless(res == 0);
 
     // Shutdown
@@ -654,11 +654,11 @@ START_TEST(test_mgr_restore)
 
     // Try to check keys now
     uint64_t size;
-    res = setmgr_set_size_total(mgr, (char*)"zab8", &size);
+    res = setmgr_set_size_total(mgr, (char*)"zab8", 4, &size);
     fail_unless(res == 0);
     fail_unless(size == 3);
 
-    res = setmgr_drop_set(mgr, (char*)"zab8");
+    res = setmgr_drop_set(mgr, (char*)"zab8", 4);
     fail_unless(res == 0);
 
     res = destroy_set_manager(mgr);
@@ -666,11 +666,12 @@ START_TEST(test_mgr_restore)
 }
 END_TEST
 
-void test_mgr_cb(void *data, char *set_name, hlld_set* set) {
+int test_mgr_cb(void *data, char *set_name, hlld_set* set) {
     (void)set_name;
     (void)set;
     int *out = (int*)data;
     *out = 1;
+    return 0;
 }
 
 START_TEST(test_mgr_callback)
@@ -684,14 +685,14 @@ START_TEST(test_mgr_callback)
     res = init_set_manager(&config, 0, &mgr);
     fail_unless(res == 0);
 
-    res = setmgr_set_keys(mgr, (char*)"cb1", sample_keys, SPARSE_MAX_KEYS + 1, time(NULL));
+    res = setmgr_set_keys(mgr, (char*)"cb1", 3, sample_keys, SPARSE_MAX_VALUES + 1, time(NULL));
     fail_unless(res == 0);
 
     int val = 0;
-    res = setmgr_set_cb(mgr, (char*)"cb1", test_mgr_cb, &val);
+    res = setmgr_set_cb(mgr, (char*)"cb1", 3, test_mgr_cb, &val);
     fail_unless(val == 1);
 
-    res = setmgr_drop_set(mgr, (char*)"cb1");
+    res = setmgr_drop_set(mgr, (char*)"cb1", 3);
     fail_unless(res == 0);
 
     res = destroy_set_manager(mgr);

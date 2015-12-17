@@ -1,4 +1,4 @@
-#include <assert.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <syslog.h>
@@ -17,8 +17,6 @@
  * iterations in microseconds
  */
 #define VACUUM_POLL_USEC 500000
-
-#define SPARSE_MAX_KEYS 16
 
 /**
  * Wraps a struct hlld_set to ensure only a single
@@ -130,20 +128,17 @@ struct hlld_setmgr {
 /*
  * Static declarations
  */
-static const char FOLDER_PREFIX[] = "hlld.";
-static const int FOLDER_PREFIX_LEN = sizeof(FOLDER_PREFIX) - 1;
-
-static struct hlld_set_wrapper* find_set(struct hlld_setmgr *mgr, char *set_name);
-static struct hlld_set_wrapper* take_set(struct hlld_setmgr *mgr, char *set_name);
+static struct hlld_set_wrapper* find_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len);
+static struct hlld_set_wrapper* take_set(struct hlld_setmgr *mgr, char *full_key);
 static void delete_set(struct hlld_set_wrapper *set);
-static int add_set(struct hlld_setmgr *mgr, char *set_name, struct hlld_config *config, int is_hot, int delta);
+static struct hlld_set_wrapper *add_set(struct hlld_setmgr *mgr, char *full_key, struct hlld_config *config, int is_hot, int delta);
 static int set_map_list_cb(void *data, const unsigned char *key, uint32_t key_len, void *value);
 static int set_map_list_cold_cb(void *data, const unsigned char *key, uint32_t key_len, void *value);
 static int set_map_delete_cb(void *data, const unsigned char *key, uint32_t key_len, void *value);
 static int load_existing_sets(struct hlld_setmgr *mgr);
 static unsigned long long create_delta_update(struct hlld_setmgr *mgr, delta_type type, struct hlld_set_wrapper *set);
 static void* setmgr_thread_main(void *in);
-int setmgr_create_dense_set(struct hlld_setmgr *mgr, char *set_name, struct hlld_config *custom_config);
+struct hlld_set_wrapper *setmgr_fetch_dense_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len);
 
 // Link the external murmur hash in
 extern void MurmurHash3_x64_128(const void * key, const int len, const uint32_t seed, void *out);
@@ -217,9 +212,6 @@ int init_set_manager(struct hlld_config *config, int vacuum, struct hlld_setmgr 
  * @return 0 on success.
  */
 int destroy_set_manager(struct hlld_setmgr *mgr) {
-    // Cleanup the sparsedb
-    destroy_sparse(mgr->sparsedb);
-
     // Stop the vacuum thread
     mgr->should_run = 0;
     if (mgr->vacuum_thread) pthread_join(mgr->vacuum_thread, NULL);
@@ -252,9 +244,40 @@ int destroy_set_manager(struct hlld_setmgr *mgr) {
     destroy_art_tree(mgr->alt_set_map);
     free((mgr->set_map < mgr->alt_set_map) ? mgr->set_map : mgr->alt_set_map);
 
+    // Cleanup the sparsedb
+    destroy_sparse(mgr->sparsedb);
+
     // Free the manager
     free(mgr);
     return 0;
+}
+
+char *setmgr_get_stats(struct hlld_setmgr *mgr) {
+    char *sparse_stats = sparse_get_stats(mgr->sparsedb);
+    if (!sparse_stats) return NULL;
+
+    int res;
+    char *output;
+    res = asprintf(&output, "\
+================\n\
+== Dense Sets ==\n\
+================\n\
+\n\
+count:%lu\n\
+\n\
+=========================\n\
+== RocksDB Sparse Sets ==\n\
+=========================\n\
+%s\n",
+        art_size(mgr->set_map),
+        sparse_stats
+    );
+    free(sparse_stats);
+
+    if (res < 0) {
+      return NULL;
+    }
+    return output;
 }
 
 /**
@@ -329,12 +352,12 @@ void setmgr_client_leave(struct hlld_setmgr *mgr) {
 
 /**
  * Flushes the set with the given name
- * @arg set_name The name of the set to flush
+ * @arg full_key The name of the set to flush
  * @return 0 on success. -1 if the set does not exist.
  */
-int setmgr_flush_set(struct hlld_setmgr *mgr, char *set_name) {
+int setmgr_flush_dense_set(struct hlld_setmgr *mgr, char *full_key) {
     // Get the set
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
+    struct hlld_set_wrapper *set = take_set(mgr, full_key);
     if (!set) return -1;
 
     // Acquire the READ lock. We use the read lock
@@ -352,41 +375,43 @@ int setmgr_flush_set(struct hlld_setmgr *mgr, char *set_name) {
 
 /**
  * Sets keys in a given set
- * @arg set_name The name of the set
+ * @arg full_key The name of the set
  * @arg keys A list of points to character arrays to add
  * @arg num_keys The number of keys to add
  * * @return 0 on success, -1 on internal error.
  */
-int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int num_keys, time_t timestamp) {
-    assert(num_keys <= MULTI_OP_SIZE);
+int setmgr_set_keys(struct hlld_setmgr *mgr, char *full_key, int full_key_len, char **values, int num_values, time_t timestamp) {
+
+    if (num_values > MULTI_OP_SIZE) {
+        syslog(LOG_ERR, "Received too many values on setmgr_set_keys");
+        return -1;
+    }
 
     int res;
     uint64_t hashes[MULTI_OP_SIZE];
 
     uint64_t out[2];
-    for (int i = 0; i < num_keys; i++) {
-      MurmurHash3_x64_128(keys[i], strlen(keys[i]), 0, &out);
+    for (int i = 0; i < num_values; i++) {
+      MurmurHash3_x64_128(values[i], strlen(values[i]), 0, &out);
       hashes[i] = out[1];
     }
 
     res = sparse_add(
-        mgr->sparsedb, set_name, strlen(set_name),
-        hashes, num_keys, timestamp
+        mgr->sparsedb, full_key, full_key_len,
+        hashes, num_values, timestamp
     );
 
     struct hlld_set_wrapper *set;
     if (res >= 0) {
-        if (res > SPARSE_MAX_KEYS) {
+        if (res > SPARSE_MAX_VALUES) {
           // We went over the maximum number of sparse keys, convert the set to dense
-          res = setmgr_create_dense_set(mgr, set_name, NULL);
-          if (res) return -1;
-          set = take_set(mgr, set_name);
+          set = setmgr_fetch_dense_set(mgr, full_key, full_key_len);
           if (!set) return -1;
 
           pthread_rwlock_rdlock(&set->rwlock);
           sparse_convert_dense(
-              mgr->sparsedb, set_name, strlen(set_name),
-              &set->set->hll
+              mgr->sparsedb, full_key, full_key_len,
+              set->set
           );
           set->is_hot = 1;
           pthread_rwlock_unlock(&set->rwlock);
@@ -398,17 +423,12 @@ int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int nu
     }
 
     // Get the set
-    set = take_set(mgr, set_name);
+    set = take_set(mgr, full_key);
 
     // Automatically create the set if it doesn't exist
     if (!set) {
-        res = setmgr_create_dense_set(mgr, set_name, NULL);
-        if (res) {
-          return -1;
-        }
-        set = take_set(mgr, set_name);
+        set = setmgr_fetch_dense_set(mgr, full_key, full_key_len);
     }
-
     if (!set) return -1;
 
     // Acquire the READ lock. We use the read lock
@@ -416,7 +436,7 @@ int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int nu
     pthread_rwlock_rdlock(&set->rwlock);
 
     // Set the keys, store the results
-    for (int i = 0; i < num_keys; i++) {
+    for (int i = 0; i < num_values; i++) {
         res = hset_add_hash(set->set, hashes[i], timestamp);
         if (res) break;
     }
@@ -433,13 +453,13 @@ int setmgr_set_keys(struct hlld_setmgr *mgr, char *set_name, char **keys, int nu
 
 /**
  * Estimates the size of a set
- * @arg set_name The name of the set
+ * @arg full_key The name of the set
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est) {
+int setmgr_set_size_total(struct hlld_setmgr *mgr, char *full_key, int full_key_len, uint64_t *est) {
     // If it's in the sparsedb return the value from that
-    int size = sparse_size_total(mgr->sparsedb, set_name, strlen(set_name));
+    int size = sparse_size_total(mgr->sparsedb, full_key, full_key_len);
     if (size >= 0) {
       *est = size;
       return 0;
@@ -447,8 +467,12 @@ int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est
       return -1;
     }
 
+    return setmgr_dense_set_size_total(mgr, full_key, est);
+}
+
+int setmgr_dense_set_size_total(struct hlld_setmgr *mgr, char *full_key, uint64_t *est) {
     // Get the set
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
+    struct hlld_set_wrapper *set = take_set(mgr, full_key);
     if (!set) return -1;
 
     // Acquire the READ lock. We use the read lock
@@ -465,22 +489,24 @@ int setmgr_set_size_total(struct hlld_setmgr *mgr, char *set_name, uint64_t *est
 
 /**
  * Estimates the size of the union of the sets
- * @arg set_name The name of the set
+ * @arg full_key The name of the set
  * @arg est Output pointer, the estimate on success.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_names, uint64_t *est, uint64_t time_window) {
-    // union_size does not work with sparse sets
-    assert(0);
-    // need to add timestamp
-    assert(0);
+int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **full_keys, uint64_t *est, uint64_t time_window) {
+    if (1) {
+        // union_size does not work with sparse sets
+        // need to add timestamp
+        syslog(LOG_ERR, "setmgr_union is disabled");
+        return -1;
+    }
 
     // Get the set
     struct hlld_set_wrapper **set_wrappers = (struct hlld_set_wrapper**)malloc(sizeof(struct hlld_set_wrapper*)*num_sets);
     struct hlld_set **sets = (struct hlld_set**)malloc(sizeof(struct hlld_set)*num_sets);
     int num_sets_exist = 0;
     for(int i=0; i<num_sets; i++) {
-        set_wrappers[num_sets_exist] = take_set(mgr, set_names[i]);
+        set_wrappers[num_sets_exist] = take_set(mgr, full_keys[i]);
         if (set_wrappers[num_sets_exist]) {
             sets[num_sets_exist] = set_wrappers[num_sets_exist]->set;
             num_sets_exist++;
@@ -512,15 +538,15 @@ int setmgr_set_union_size(struct hlld_setmgr *mgr, int num_sets, char **set_name
 
 /**
  * Estimates the size of a set in a given time window
- * @arg set_name The name of the set
+ * @arg full_key The name of the set
  * @arg est Output pointer, the estimate on success.
  * @arg timestamp
  * @arg time_window Time window we query over
  * @return 0 on success
  */
-int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time_t timestamp, uint64_t time_window) {
+int setmgr_set_size(struct hlld_setmgr *mgr, char *full_key, int full_key_len, uint64_t *est, time_t timestamp, uint64_t time_window) {
     // If it's in the sparsedb return the value from that
-    int size = sparse_size(mgr->sparsedb, set_name, strlen(set_name), timestamp, time_window);
+    int size = sparse_size(mgr->sparsedb, full_key, full_key_len, timestamp, time_window);
     if (size >= 0) {
       *est = size;
       return 0;
@@ -529,7 +555,7 @@ int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time
     }
 
     // Get the set
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
+    struct hlld_set_wrapper *set = take_set(mgr, full_key);
     if (!set) {
       *est = 0;
       return 0;
@@ -548,26 +574,29 @@ int setmgr_set_size(struct hlld_setmgr *mgr, char *set_name, uint64_t *est, time
 }
 
 /**
- * Creates a new set of the given name and parameters.
- * @arg set_name The name of the set
+ * Create/get a new set of the given name and parameters.
+ * @arg full_key The name of the set
  * @arg custom_config Optional, can be null. Configs that override the defaults.
- * @return 0 on success, -1 if the set already exists.
- * -2 for internal error. -3 if there is a pending delete.
+ * @return The set on success, null for internal error.
  */
-int setmgr_create_dense_set(struct hlld_setmgr *mgr, char *set_name, struct hlld_config *custom_config) {
-    int res = 0;
-    pthread_mutex_lock(&mgr->write_lock);
+struct hlld_set_wrapper *setmgr_fetch_dense_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len) {
+    // Try first fetch the set without using the write_lock
+    struct hlld_set_wrapper *set = find_set(mgr, full_key, full_key_len);
+    if (set && set->is_active) {
+        return set;
+    }
 
-    /*
-     * Bail if the set already exists.
-     * -1 if the set is active
-     * -3 if delete is pending
-     */
-    struct hlld_set_wrapper *set = find_set(mgr, set_name);
+    // If we can't find the thread, take the write lock and create if needed.
+    pthread_mutex_lock(&mgr->write_lock);
+    set = find_set(mgr, full_key, full_key_len);
     if (set) {
-        res = (set->is_active) ? -1 : -3;
         pthread_mutex_unlock(&mgr->write_lock);
-        return res;
+        if (set->is_active) {
+          return set;
+        } else {
+          // Delete is pending
+          return NULL;
+        }
     }
 
     // Scan the pending delete queue
@@ -575,11 +604,11 @@ int setmgr_create_dense_set(struct hlld_setmgr *mgr, char *set_name, struct hlld
     if (mgr->pending_deletes) {
         struct hlld_set_list *node = mgr->pending_deletes;
         while (node) {
-            if (!strcmp(node->set_name, set_name)) {
-                res = -3; // Pending delete
+            if (!strcmp(node->full_key, full_key)) {
+                // Pending delete
                 UNLOCK_HLLD_SPIN(&mgr->pending_lock);
                 pthread_mutex_unlock(&mgr->write_lock);
-                return res;
+                return NULL;
             }
             node = node->next;
         }
@@ -587,27 +616,25 @@ int setmgr_create_dense_set(struct hlld_setmgr *mgr, char *set_name, struct hlld
     UNLOCK_HLLD_SPIN(&mgr->pending_lock);
 
     // Use a custom config if provided, else the default
-    struct hlld_config *config = (custom_config) ? custom_config : mgr->config;
+    struct hlld_config *config = mgr->config;
 
-    // Add the set
-    if (add_set(mgr, set_name, config, 1, 1)) {
-        res = -2; // Internal error
-    }
-
+    // Add the set (returns NULL on failure)
+    set = add_set(mgr, full_key, config, 1, 1);
     pthread_mutex_unlock(&mgr->write_lock);
-    return res;
+
+    return set;
 }
 
 /**
  * Deletes the set entirely. This removes it from the set
  * manager and deletes it from disk. This is a permanent operation.
- * @arg set_name The name of the set to delete
+ * @arg full_key The name of the set to delete
  * @return 0 on success
  *         -1 if the set does not exist
  *         -2 on internal error
  */
-int setmgr_drop_set(struct hlld_setmgr *mgr, char *set_name) {
-    int is_dense = sparse_is_dense(mgr->sparsedb, set_name, strlen(set_name));
+int setmgr_drop_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len) {
+    int is_dense = sparse_is_dense(mgr->sparsedb, full_key, full_key_len);
 
     if (is_dense == -1) return -1;
     else if (is_dense < 0) return -2;
@@ -616,7 +643,7 @@ int setmgr_drop_set(struct hlld_setmgr *mgr, char *set_name) {
       pthread_mutex_lock(&mgr->write_lock);
 
       // Get the set
-      struct hlld_set_wrapper *set = take_set(mgr, set_name);
+      struct hlld_set_wrapper *set = take_set(mgr, full_key);
       if (!set) {
           pthread_mutex_unlock(&mgr->write_lock);
           return -1;
@@ -629,23 +656,25 @@ int setmgr_drop_set(struct hlld_setmgr *mgr, char *set_name) {
       pthread_mutex_unlock(&mgr->write_lock);
     }
 
-    return sparse_drop(mgr->sparsedb, set_name, strlen(set_name));
+    return sparse_drop(mgr->sparsedb, full_key, full_key_len);
 }
 
 
 /**
  * Clears the set from the internal data stores. This can only
  * be performed if the set is proxied.
- * @arg set_name The name of the set to delete
+ * @arg full_key The name of the set to delete
  * @return 0 on success, -1 if the set does not exist, -2
  * if the set is not proxied.
  */
-int setmgr_clear_set(struct hlld_setmgr *mgr, char *set_name) {
+int setmgr_clear_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len) {
+    (void) full_key_len;
+
     int res = 0;
     pthread_mutex_lock(&mgr->write_lock);
 
     // Get the set
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
+    struct hlld_set_wrapper *set = take_set(mgr, full_key);
     if (!set) {
         res = -1;
         goto LEAVE;
@@ -675,12 +704,12 @@ LEAVE:
  * by a client, as it can be handled automatically by hlld,
  * but particular clients with specific needs may use it as an
  * optimization.
- * @arg set_name The name of the set to delete
+ * @arg full_key The name of the set to delete
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_unmap_set(struct hlld_setmgr *mgr, char *set_name) {
+int setmgr_unmap_dense_set(struct hlld_setmgr *mgr, char *full_key) {
     // Get the set
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
+    struct hlld_set_wrapper *set = take_set(mgr, full_key);
     if (!set) return -1;
 
     // Bail if we are in memory only
@@ -730,9 +759,9 @@ int setmgr_list_sets(struct hlld_setmgr *mgr, const char *prefix, struct hlld_se
         // Check if this is a match (potential prefix)
         if (current->type == CREATE) {
             s = current->set;
-            if (!prefix_len || !strncmp(s->set->set_name, prefix, prefix_len)) {
+            if (!prefix_len || !strncmp(s->set->full_key, prefix, prefix_len)) {
                 s = current->set;
-                set_map_list_cb(h, (unsigned char*)s->set->set_name, 0, s);
+                set_map_list_cb(h, (unsigned char*)s->set->full_key, 0, s);
             }
         }
 
@@ -773,14 +802,18 @@ int setmgr_list_cold_sets(struct hlld_setmgr *mgr, struct hlld_set_list_head **h
  * It should be used to read metrics, size information, etc.
  * @return 0 on success, -1 if the set does not exist.
  */
-int setmgr_set_cb(struct hlld_setmgr *mgr, char *set_name, set_cb cb, void* data) {
+int setmgr_dense_set_cb(struct hlld_setmgr *mgr, char *full_key, int full_key_len, set_cb cb, void* data) {
+    (void) full_key_len;
+
     // Get the set
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
+    struct hlld_set_wrapper *set = take_set(mgr, full_key);
     if (!set) return -1;
 
     // Callback
-    cb(data, set_name, set->set);
-    return 0;
+    return cb(data, full_key, set->set);
+}
+int setmgr_set_cb(struct hlld_setmgr *mgr, char *full_key, set_cb cb, void* data) {
+    return setmgr_dense_set_cb(mgr, full_key, strlen(full_key), cb, data);
 }
 
 
@@ -791,7 +824,7 @@ void setmgr_cleanup_list(struct hlld_set_list_head *head) {
     struct hlld_set_list *next, *current = head->head;
     while (current) {
         next = current->next;
-        free(current->set_name);
+        free(current->full_key);
         free(current);
         current = next;
     }
@@ -802,9 +835,10 @@ void setmgr_cleanup_list(struct hlld_set_list_head *head) {
 /**
  * Searches the primary tree and the delta list for a set
  */
-static struct hlld_set_wrapper* find_set(struct hlld_setmgr *mgr, char *set_name) {
+static struct hlld_set_wrapper* find_set(struct hlld_setmgr *mgr, char *full_key, int full_key_len) {
     // Search the tree first
-    struct hlld_set_wrapper *set = (struct hlld_set_wrapper*)art_search(mgr->set_map, (unsigned char*)set_name, strlen(set_name)+1);
+    struct hlld_set_wrapper *set = (struct hlld_set_wrapper*) art_search(
+        mgr->set_map, (unsigned char *)full_key, full_key_len + 1);
 
     // If we found the set, check if it is active
     if (set) return set;
@@ -817,7 +851,7 @@ static struct hlld_set_wrapper* find_set(struct hlld_setmgr *mgr, char *set_name
     while (current) {
         // Check if this is a match
         if (current->type != BARRIER &&
-            strcmp(current->set->set->set_name, set_name) == 0) {
+            strcmp(current->set->set->full_key, full_key) == 0) {
             return current->set;
         }
 
@@ -835,8 +869,8 @@ static struct hlld_set_wrapper* find_set(struct hlld_setmgr *mgr, char *set_name
 /**
  * Gets the hlld set in a thread safe way.
  */
-static struct hlld_set_wrapper* take_set(struct hlld_setmgr *mgr, char *set_name) {
-    struct hlld_set_wrapper *set = find_set(mgr, set_name);
+static struct hlld_set_wrapper* take_set(struct hlld_setmgr *mgr, char *full_key) {
+    struct hlld_set_wrapper *set = setmgr_fetch_dense_set(mgr, full_key, strlen(full_key));
     return (set && set->is_active) ? set : NULL;
 }
 
@@ -867,7 +901,7 @@ static void delete_set(struct hlld_set_wrapper *set) {
 /**
  * Creates a new set and adds it to the set set.
  * @arg mgr The manager to add to
- * @arg set_name The name of the set
+ * @arg full_key The name of the set
  * @arg config The configuration for the set
  * @arg is_hot Is the set hot. False for existing.
  * @arg delta Should a delta entry be added, or the primary tree updated.
@@ -875,7 +909,7 @@ static void delete_set(struct hlld_set_wrapper *set) {
  * the primary tree.
  * @return 0 on success, -1 on error
  */
-static int add_set(struct hlld_setmgr *mgr, char *set_name, struct hlld_config *config, int is_hot, int delta) {
+static struct hlld_set_wrapper *add_set(struct hlld_setmgr *mgr, char *full_key, struct hlld_config *config, int is_hot, int delta) {
     // Create the set
     struct hlld_set_wrapper *set = (struct hlld_set_wrapper*)calloc(1, sizeof(struct hlld_set_wrapper));
     set->is_active = 1;
@@ -889,19 +923,19 @@ static int add_set(struct hlld_setmgr *mgr, char *set_name, struct hlld_config *
     }
 
     // Try to create the underlying set. Only discover if it is hot.
-    int res = init_set(config, set_name, is_hot, &set->set);
+    int res = init_set(config, full_key, is_hot, &set->set);
     if (res != 0) {
         free(set);
-        return -1;
+        return NULL;
     }
 
     // Check if we are adding a delta value or directly updating ART tree
     if (delta)
         create_delta_update(mgr, CREATE, set);
     else
-        art_insert(mgr->set_map, (unsigned char*)set_name, strlen(set_name)+1, set);
+        art_insert(mgr->set_map, (unsigned char*)full_key, strlen(full_key)+1, set);
 
-    return 0;
+    return set;
 }
 
 /**
@@ -922,7 +956,7 @@ static int set_map_list_cb(void *data, const unsigned char *key, uint32_t key_le
     struct hlld_set_list *node = (struct hlld_set_list*)malloc(sizeof(struct hlld_set_list));
 
     // Setup
-    node->set_name = strdup((char*)key);
+    node->full_key = strdup((char*)key);
     node->next = NULL;
 
     // Inject at head if first node
@@ -965,7 +999,7 @@ static int set_map_list_cold_cb(void *data, const unsigned char *key, uint32_t k
     struct hlld_set_list *node = (struct hlld_set_list*)malloc(sizeof(struct hlld_set_list));
 
     // Setup
-    node->set_name = strdup((char*)key);
+    node->full_key = strdup((char*)key);
     node->next = head->head;
 
     // Inject
@@ -992,50 +1026,10 @@ static int set_map_delete_cb(void *data, const unsigned char *key, uint32_t key_
  * safe and assumes that we are being initialized.
  */
 static int load_existing_sets(struct hlld_setmgr *mgr) {
-    struct dirent **namelist;
-    int num;
-
-    num = scandir(mgr->config->dense_dir, &namelist, NULL, NULL);
-    if (num == -1) {
-        syslog(LOG_ERR, "Failed to scan files for existing sets!");
-        return -1;
-    }
-    syslog(LOG_INFO, "Found %d existing sets", num);
-
-    // Add all the sets
-    for (int i=0; i< num; i++) {
-        DIR *dir = NULL;
-        struct dirent *file = NULL;
-        if (namelist[i]->d_name[0] == '.') {
-            continue;
-        }
-
-        char *subfolder_name = join_path(mgr->config->dense_dir, namelist[i]->d_name);
-        syslog(LOG_INFO, "Loading subfolder: %s", subfolder_name);
-
-        if ((dir = opendir(subfolder_name)) != NULL) {
-            while ((file = readdir(dir)) != NULL) {
-              if (file->d_name[0] == '.') {
-                continue;
-              }
-              char *set_name;
-              int res = asprintf(&set_name, "%s%s", namelist[i]->d_name, file->d_name);
-              assert(res != -1);
-
-              if (add_set(mgr, set_name, mgr->config, 0, 0)) {
-                  syslog(LOG_ERR, "Failed to load set '%s'!", set_name);
-              }
-              free(set_name);
-            }
-            closedir(dir);
-        } else {
-            syslog(LOG_ERR, "Failed to open directory '%s'", subfolder_name);
-        }
-        free(subfolder_name);
-    }
-
-    for (int i=0; i < num; i++) free(namelist[i]);
-    free(namelist);
+    // This used to load in all the sets before hand, but we don't need to do
+    // that anymore now that we load them on the fly from rocksdb. Still need
+    // some warming logic eventually though.
+    (void) mgr;
     return 0;
 }
 
@@ -1073,10 +1067,10 @@ static void merge_old_versions(struct hlld_setmgr *mgr, set_list *delta, unsigne
     struct hlld_set_wrapper *s = delta->set;
     switch (delta->type) {
         case CREATE:
-            art_insert(mgr->alt_set_map, (unsigned char*)s->set->set_name, strlen(s->set->set_name)+1, s);
+            art_insert(mgr->alt_set_map, (unsigned char*)s->set->full_key, s->set->full_key_len+1, s);
             break;
         case DELETE:
-            art_delete(mgr->alt_set_map, (unsigned char*)s->set->set_name, strlen(s->set->set_name)+1);
+            art_delete(mgr->alt_set_map, (unsigned char*)s->set->full_key, s->set->full_key_len+1);
             break;
         case BARRIER:
             // Ignore the barrier...
@@ -1095,7 +1089,7 @@ static void mark_pending_deletes(struct hlld_setmgr *mgr, unsigned long long min
     while (delta) {
         if (delta->vsn <= min_vsn && delta->type == DELETE) {
             tmp = (struct hlld_set_list*)malloc(sizeof(struct hlld_set_list));
-            tmp->set_name = strdup(delta->set->set->set_name);
+            tmp->full_key = strdup(delta->set->set->full_key);
             tmp->next = pending;
             pending = tmp;
         }
@@ -1123,7 +1117,7 @@ static void clear_pending_deletes(struct hlld_setmgr *mgr) {
     // Free the nodes
     struct hlld_set_list *next;
     while (pending) {
-        free(pending->set_name);
+        free(pending->full_key);
         next = pending->next;
         free(pending);
         pending = next;
@@ -1322,12 +1316,3 @@ void setmgr_vacuum(struct hlld_setmgr *mgr) {
     merge_old_versions(mgr, mgr->delta, vsn);
     delete_old_versions(mgr, vsn);
 }
-
-
-struct hlld_set* setmgr_get_set(struct hlld_setmgr *mgr, char *set_name) {
-    struct hlld_set_wrapper *set = take_set(mgr, set_name);
-    if(!set || !set->is_active)
-        return NULL;
-    return set->set;
-}
-

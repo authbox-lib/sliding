@@ -8,9 +8,9 @@
 #include <pthread.h>
 #include <sys/time.h>
 #include <errno.h>
-#include <assert.h>
 #include "set.h"
 #include "serialize.h"
+#include "sparse.h"
 #include "type_compat.h"
 
 /*
@@ -25,13 +25,16 @@ extern void MurmurHash3_x64_128(const void * key, const int len, const uint32_t 
 /**
  * Initializes a set wrapper.
  * @arg config The configuration to use
- * @arg set_name The name of the set
+ * @arg full_key The name of the set
  * @arg discover Should existing data files be discovered. Otherwise
  * they will be faulted in on-demand.
  * @arg set Output parameter, the new set
  * @return 0 on success
  */
-int init_set(struct hlld_config *config, char *set_name, int discover, struct hlld_set **set) {
+int init_set(
+    struct hlld_config *config, char *full_key,
+    int discover, struct hlld_set **set
+) {
     // Allocate the buffers
     struct hlld_set *s = *set = (struct hlld_set*)calloc(1, sizeof(struct hlld_set));
 
@@ -41,9 +44,11 @@ int init_set(struct hlld_config *config, char *set_name, int discover, struct hl
     s->hll.precision = config->default_precision;
 
     s->is_config_dirty = 0;
+
     // Store the things
     s->config = config;
-    s->set_name = strdup(set_name);
+    s->full_key = strdup(full_key);
+    s->full_key_len = strlen(full_key);
 
     // Copy set configs
     s->set_config.default_eps = config->default_eps;
@@ -52,44 +57,17 @@ int init_set(struct hlld_config *config, char *set_name, int discover, struct hl
     s->set_config.sliding_period = config->sliding_period;
     s->set_config.sliding_precision = config->sliding_precision;
 
-    char subdir_name[11];
-    int set_name_len = strlen(s->set_name);
-    int prefix_dir_len=0;
-    for(; prefix_dir_len < 2 && prefix_dir_len < set_name_len - 1; prefix_dir_len++) {
-        subdir_name[prefix_dir_len] = s->set_name[prefix_dir_len];
-    }
-    subdir_name[prefix_dir_len] = 0;
-
-    s->full_path = join_path(config->dense_dir, subdir_name);
-
-    // Try to create the folder path
-    int res = mkdir(s->full_path, 0755);
-    if (res && errno != EEXIST) {
-        syslog(LOG_ERR, "Failed to create set directory '%s'. Err: %d [%d]", s->full_path, res, errno);
-        return res;
-    }
-
-    // Compute the full path
-    s->full_path = join_path(s->full_path, s->set_name + prefix_dir_len);
-
     // Initialize the locks
     INIT_HLLD_SPIN(&s->hll_update);
     pthread_mutex_init(&s->hll_lock, NULL);
 
     // Discover the existing set if we need to
-    res = 0;
+    int res = 0;
     if (discover) {
         res = thread_safe_fault(s);
         if (res) {
-            syslog(LOG_ERR, "Failed to fault in the set '%s'. Err: %d", s->set_name, res);
-            printf("Failed to fault in the set '%s'. Err: %d", s->set_name, res);
+            syslog(LOG_ERR, "Failed to fault in the set '%s'. Err: %d", s->full_key, res);
         }
-    }
-
-    // Trigger a flush on first instantiation. This will create
-    // a new ini file for first time sets.
-    if (!res) {
-        res = hset_flush(s);
     }
 
     return res;
@@ -105,8 +83,7 @@ int destroy_set(struct hlld_set *set) {
     hset_close(set);
 
     // Cleanup
-    free(set->set_name);
-    free(set->full_path);
+    free(set->full_key);
     free(set);
     return 0;
 }
@@ -150,25 +127,22 @@ int hset_flush(struct hlld_set *set) {
     if (!set->is_dirty)
         return 0;
 
-    // Store our properties for a future unmap
-    // Let's not do this for now. We almost never care about total anyway. This is expensive
-    //set->set_config.size = hset_size_total(set);
-
-    // Write out set_config
-
     // Turn dirty off
     set->is_dirty = 0;
 
     // Flush the set
     int res = 0;
     if (!set->set_config.in_memory) {
-        res = serialize_hll_to_filename(set->full_path, &set->hll);
+        res = serialize_hll_to_sparsedb(
+            sparse_get_global(), &set->hll,
+            set->full_key, set->full_key_len
+        );
     }
 
     // Compute the elapsed time
     gettimeofday(&end, NULL);
     syslog(LOG_DEBUG, "Flushed set '%s'. Total time: %d msec.",
-            set->set_name, timediff_msec(&start, &end));
+            set->full_key, timediff_msec(&start, &end));
     return res;
 }
 
@@ -203,8 +177,13 @@ int hset_delete(struct hlld_set *set) {
     // Close first
     hset_close(set);
 
-    if (unlink(set->full_path)) {
-        syslog(LOG_ERR, "Failed to delete: %s. %s", set->full_path, strerror(errno));
+    // @TODO: This should delete the key rather than writing an empty set
+    if (sparse_write_dense_data(
+        sparse_get_global(),
+        set->full_key, set->full_key_len,
+        (unsigned char *)"", 0
+    )) {
+        syslog(LOG_ERR, "Failed to delete: %s. %s", set->full_key, strerror(errno));
     }
 
     return 0;
@@ -272,7 +251,6 @@ uint64_t hset_size(struct hlld_set *set, time_t timestamp, uint64_t time_window)
  * @arg timestamp the current time
  */
 uint64_t hset_size_union(struct hlld_set **sets, int num_sets, time_t timestamp, uint64_t time_window) {
-    printf("querying union size\n");
     hll_t **hlls = (hll_t **)malloc(sizeof(hll_t)*num_sets);
     for(int i=0; i<num_sets; i++) {
         hlls[i] = &sets[i]->hll;
@@ -298,6 +276,7 @@ uint64_t hset_byte_size(struct hlld_set *set) {
 static int thread_safe_fault(struct hlld_set *s) {
     // Acquire lock
     int res = 0;
+    char *full_key = NULL;
     pthread_mutex_lock(&s->hll_lock);
 
     // Bail if we already faulted in
@@ -318,44 +297,35 @@ static int thread_safe_fault(struct hlld_set *s) {
 
     }
 
-    // Check if the register file exists
-    struct stat buf;
-    res = stat(s->full_path, &buf);
-    if(res == 0) {
-        //syslog(LOG_ERR, "Discovered HLL set: %s.", s->full_path);
+    res = unserialize_hll_from_sparsedb(
+        sparse_get_global(), &s->hll,
+        s->full_key, s->full_key_len
+    );
+
+    // If the hll was not available, setup a new one
+    if (res == -2) {
+      syslog(LOG_ERR, "hll not found in sparsedb: %s", s->full_key);
+      s->is_proxied = 0;
+      res = hll_init(
+              s->set_config.default_precision,
+              s->set_config.sliding_period, 
+              s->set_config.sliding_precision,
+              &s->hll); 
+      goto LEAVE;
     }
 
-    // Handle if the file exists and contains data (read existing hll)
-    if (res == 0 && buf.st_size != 0) {
-        //syslog(LOG_ERR, "Discovered HLL set: %s.", bitmap_path);
-        res = unserialize_hll_from_filename(s->full_path, &s->hll);
-        if (res) {
-            syslog(LOG_ERR, "Failed to load hll: %s. %s", s->full_path, strerror(errno));
-            goto LEAVE;
-        }
-
-        s->is_proxied = 0;
-        // Increase our page ins
-        s->counters.page_ins += 1;
-
-    // Handle if it doesn't exist (create the file)
-    } else if ((res == -1 && errno == ENOENT) || (res == 0 && buf.st_size == 0)) {
-        // We no longer need to create a file before serializing
-        s->is_proxied = 0;
-        res = hll_init(
-                s->set_config.default_precision,
-                s->set_config.sliding_period, 
-                s->set_config.sliding_precision,
-                &s->hll); 
-    // Handle any other error
-    } else {
-        syslog(LOG_ERR, "Failed to query the register file for: %s. %s", s->full_path, strerror(errno));
+    if (res) {
+        syslog(LOG_ERR, "Failed to load hll: %s. %s", s->full_key, strerror(errno));
         goto LEAVE;
     }
+
+    s->is_proxied = 0;
+    s->counters.page_ins += 1;
 
 LEAVE:
     // Release lock
     pthread_mutex_unlock(&s->hll_lock);
+    if (full_key) free(full_key);
 
     return res;
 }

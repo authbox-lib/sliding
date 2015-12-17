@@ -56,17 +56,20 @@ static const int END_RESP_LEN = sizeof(END_RESP) - 1;
 
 typedef enum {
     UNKNOWN = 0,    // Unrecognized command
-    SET,            // Set a single key
     SET_MULTI,      // Set multiple space-seperated keys
     LIST,           // List sets
-    INFO,           // Info about a set
+    INFO,           // Info about server
+    STATS,          // Human readable server stats
+    ECHO,
+    DETAIL,         // Details about a set
+
+    // DEPRECATED:
+    SIZE,           // Size of set
+    SET,
     DROP,           // Drop a set
     CLOSE,          // Close a set
     CLEAR,          // Clears a set from the internals
     FLUSH,          // Force flush a set
-    SIZE,           // Size of set
-    ECHO,
-    DETAIL,         // Details about a set
 } conn_cmd_type;
 
 /* Static regexes */

@@ -92,13 +92,6 @@ void hll_register_remove_point(hll_register *r, size_t idx) {
     r->size--;
     assert(r->size >= 0);
     r->points[idx] = r->points[r->size];
-
-    // shrink array when below a certain bound
-    if (r->size*GROWTH_FACTOR*GROWTH_FACTOR < r->capacity) {
-        r->capacity = r->capacity/GROWTH_FACTOR+1;
-        assert(r->capacity > r->size);
-        r->points = (hll_dense_point*)realloc(r->points, r->capacity*sizeof(hll_dense_point));
-    }
 }
 
 /**
@@ -106,13 +99,11 @@ void hll_register_remove_point(hll_register *r, size_t idx) {
  * @arg r The register to add the point to
  * @arg p The time/leading point to add to the register
  */
-void hll_register_add_point(hll_t *h, hll_register *r, hll_dense_point p) {
-    // remove all points with smaller register value or that have expired.
-    long long max_time = p.timestamp - h->window_period/ h->window_precision;
+void hll_register_add_point(hll_register *r, hll_dense_point p) {
+    // remove all points with smaller register value.
     // do this in reverse order because we remove points from the right end
     for (int i=r->size-1; i>=0; i--) {
-        if (r->points[i].register_ <= p.register_ ||
-            r->points[i].timestamp <= max_time) {
+        if (r->points[i].register_ <= p.register_) {
             hll_register_remove_point(r, i);
         }
     }
@@ -135,7 +126,7 @@ void hll_register_add_point(hll_t *h, hll_register *r, hll_dense_point p) {
 int hll_get_register(hll_t *h, int register_index, time_t timestamp, time_t time_window) {
     hll_register *r = &h->dense_registers[register_index];
 
-    time_t min_time = timestamp - time_window/h->window_precision;
+    time_t min_time = timestamp - time_window;
     int register_value = 0;
 
     for(int i=0; i<r->size; i++) {
@@ -152,7 +143,7 @@ int hll_get_register(hll_t *h, int register_index, time_t timestamp, time_t time
  * @arg h The hll to add to
  * @arg hash The hash to add
  */
-void hll_add_hash_at_time(hll_t *h, uint64_t hash, time_t time_added) {
+void hll_add_hash_at_time(hll_t *h, uint64_t hash, time_t timestamp) {
     // Determine the index using the first p bits
     int idx = hash >> (64 - h->precision);
 
@@ -162,10 +153,10 @@ void hll_add_hash_at_time(hll_t *h, uint64_t hash, time_t time_added) {
     // Determine the count of leading zeros
     long leading = __builtin_clzll(hash) + 1;
 
-    hll_dense_point p = {time_added, leading};
+    hll_dense_point p = {timestamp, leading};
     hll_register *r = &h->dense_registers[idx];
 
-    hll_register_add_point(h, r, p);
+    hll_register_add_point(r, p);
 }
 
 /*
@@ -370,7 +361,7 @@ double hll_size(hll_t *h, time_t timestamp, time_t time_window) {
 
 double hll_size_total(hll_t *h) {
     time_t ctime = time(NULL);
-    return hll_size(h, ctime*h->window_precision, ctime);
+    return hll_size(h, ctime, ctime);
 }
 
 
@@ -388,7 +379,7 @@ double hll_union_size(hll_t **hs, int num_hs, time_t timestamp, time_t time_wind
         }
     }
     int num_zero = 0;
-    double raw_est = hll_raw_estimate_union(hs, num_hs, &num_zero, timestamp,  time_window);
+    double raw_est = hll_raw_estimate_union(hs, num_hs, &num_zero, timestamp, time_window);
 
     // Check if we need to apply bias correction
     int num_reg = NUM_REG(hs[0]->precision);

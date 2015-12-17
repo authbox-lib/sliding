@@ -10,8 +10,8 @@ typedef struct {
     size_t size;
 } serialize_t;
 
-int serialize_hll(serialize_t *s, hll_t *h);
-int unserialize_hll(serialize_t *s, hll_t *h);
+int serialize_hll(serialize_t *s, hll_t *h, char *name, int name_len);
+int unserialize_hll(serialize_t *s, hll_t *h, char **name, int *name_len);
 int serialize_hll_register(serialize_t *s, hll_register *h);
 int unserialize_hll_register(serialize_t *s, hll_register *h);
 
@@ -26,9 +26,9 @@ int unserialize_time(serialize_t *s, time_t *i);
 int serialize_ulong_long(serialize_t *s, uint64_t i);
 int unserialize_ulong_long(serialize_t *s, uint64_t *i);
 
-int unserialize_hll_from_file(int fileno, uint64_t len, hll_t *h);
-int unserialize_hll_from_filename(char *filename, hll_t *h);
 
-size_t serialized_hll_size(hll_t *h);
-int serialize_hll_to_filename(char *filename, hll_t *h);
+size_t serialized_hll_size(hll_t *h, int name_len);
+
+int unserialize_hll_from_sparsedb(struct slidingd_sparsedb *sparsedb, hll_t *h, char *full_key, int full_key_len);
+int serialize_hll_to_sparsedb(struct slidingd_sparsedb *sparsedb, hll_t *h, char *full_key, int full_key_len);
 #endif

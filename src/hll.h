@@ -128,7 +128,7 @@ double hll_bias_estimate(hll_t *hu, double raw_est);
  * @arg r The register to add the point to
  * @arg p The time/leading point to add to the register
  */
-void hll_register_add_point(hll_t *h, hll_register *r, hll_dense_point p);
+void hll_register_add_point(hll_register *r, hll_dense_point p);
 
 int hll_get_register(hll_t *h, int register_index, time_t timestamp, time_t time_window);
 

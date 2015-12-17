@@ -9,11 +9,13 @@ START_TEST(test_hll_serialize)
     
     hll_t h, h_unserialize;
     fail_unless(hll_init(HLL_MIN_PRECISION, 100+(1<<12), 12, &h) == 0);
-    serialize_hll(&s, &h);
+    serialize_hll(&s, &h, (char *)"test1!", 6);
     fail_unless(hll_destroy(&h) == 0);
 
     s.offset = 0;
-    fail_unless(unserialize_hll(&s, &h_unserialize) == 0);
+    char *out_str;
+    int out_len;
+    fail_unless(unserialize_hll(&s, &h_unserialize, &out_str, &out_len) == 0);
 
     fail_unless(h_unserialize.precision == HLL_MIN_PRECISION);
     fail_unless(h_unserialize.window_period == 100+(1<<12));
@@ -27,11 +29,9 @@ START_TEST(test_serialize_register)
     unsigned char buf[2048];
     serialize_t s = { buf, 0, 2048 };
     
-    hll_t h;
-    h.window_precision = 1;
     hll_register r = {0, 0, NULL}, r_unserialize;
     hll_dense_point p = {13, 19};
-    hll_register_add_point(&h, &r, p);
+    hll_register_add_point(&r, p);
 
     serialize_hll_register(&s, &r);
 
@@ -53,18 +53,23 @@ START_TEST(test_hll_serialize_registers)
     fail_unless(hll_init(HLL_MIN_PRECISION, 100, 1, &h) == 0);
 
     hll_dense_point p = {2, 2};
-    hll_register_add_point(&h, &h.dense_registers[0], p);
+    hll_register_add_point(&h.dense_registers[0], p);
     p.register_ = 1;
     p.timestamp = 1;
-    hll_register_add_point(&h, &h.dense_registers[0], p);
+    hll_register_add_point(&h.dense_registers[0], p);
     p.register_ = 2;
-    hll_register_add_point(&h, &h.dense_registers[1], p);
-    serialize_hll(&s, &h);
+    hll_register_add_point(&h.dense_registers[1], p);
+    serialize_hll(&s, &h, (char *)"test!", 5);
     fail_unless(hll_destroy(&h) == 0);
 
     s.offset = 0;
-    fail_unless(unserialize_hll(&s, &h_unserialize) == 0);
 
+    char *out_str;
+    int out_len;
+    fail_unless(unserialize_hll(&s, &h_unserialize, &out_str, &out_len) == 0);
+
+    fail_unless(out_len == 5);
+    fail_unless(memcmp(out_str, "test!", 5) == 0);
     fail_unless(h_unserialize.dense_registers[0].size == 2);
     fail_unless(h_unserialize.dense_registers[1].size == 1);
     fail_unless(h_unserialize.dense_registers[0].points[0].register_ == 2);

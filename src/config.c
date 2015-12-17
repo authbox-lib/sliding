@@ -21,13 +21,12 @@ static const struct hlld_config DEFAULT_CONFIG = {
     9007,                          // TCP defaults to 8673
     4554,                          // UDP on 8674
     (char*)"0.0.0.0",              // Default listen on 0.0.0.0
-    (char*)"/tmp/slidingd/dense",  // Dense data dir
-    (char*)"/tmp/slidingd/sparse", // Sparse data dir
+    (char*)"/tmp/slidingd", // Sparse data dir
     (char*)"INFO",                 // INFO level
     LOG_INFO,
     .01625,             // Default 1.625% error == precision 12
     12,                 // Default 12 precision (4096 registers)
-    60,                 // Flush once a minute
+    10,                 // Flush once a minute
     3600,               // Cold after an hour
     0,                  // Persist to disk by default
     1,                  // Only a single worker thread by default
@@ -98,10 +97,8 @@ static int config_callback(void* user, const char* section, const char* name, co
         return res;
 
         // Copy the string values
-    } else if (NAME_MATCH("dense_dir")) {
-        config->dense_dir = strdup(value);
-    } else if (NAME_MATCH("sparse_dir")) {
-        config->sparse_dir = strdup(value);
+    } else if (NAME_MATCH("data_dir")) {
+        config->data_dir = strdup(value);
     } else if (NAME_MATCH("log_level")) {
         config->log_level = strdup(value);
     } else if (NAME_MATCH("bind_address")) {
@@ -332,8 +329,7 @@ int sane_worker_threads(int threads) {
 int validate_config(struct hlld_config *config) {
     int res = 0;
 
-    res |= sane_data_dir(config->dense_dir);
-    res |= sane_data_dir(config->sparse_dir);
+    res |= sane_data_dir(config->data_dir);
     res |= sane_log_level(config->log_level, &config->syslog_log_level);
     res |= sane_default_eps(config->default_eps);
     res |= sane_default_precision(config->default_precision);

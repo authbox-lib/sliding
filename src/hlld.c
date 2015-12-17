@@ -98,11 +98,7 @@ int parse_cmd_line_args(int argc, char **argv, char **config_file, int *workers)
  * Initializes the syslog configuration
  */
 void setup_syslog() {
-    // If we are on a tty, log the errors out
-    int flags = LOG_CONS|LOG_NDELAY|LOG_PID;
-    if (isatty(1)) {
-        flags |= LOG_PERROR;
-    }
+    int flags = LOG_CONS|LOG_NDELAY|LOG_PID|LOG_PERROR;
     openlog("hlld", flags, LOG_LOCAL0);
 }
 

@@ -40,7 +40,8 @@ static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_
 static void handle_flush_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 
-static void handle_info_cmd(hlld_conn_handler *handle, int arg_count);
+static void handle_info_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_stats_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 
 static inline void handle_set_cmd_resp(hlld_conn_handler *handle, int res);
 static inline void handle_client_resp(hlld_conn_info *conn, char* resp_mesg, int resp_len);
@@ -124,7 +125,10 @@ int handle_client_connect(hlld_conn_handler *handle) {
                 handle_detail_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case INFO:
-                handle_info_cmd(handle, arg_count - 1);
+                handle_info_cmd(handle, args + 1, args_len + 1, arg_count - 1);
+                break;
+            case STATS:
+                handle_stats_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case FLUSH:
                 handle_flush_cmd(handle, args + 1, args_len + 1, arg_count - 1);
@@ -215,26 +219,51 @@ static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_le
     int err;
 
     // If we have no args, complain.
-    if (args_count != 3) BAD_ARG_ERR();
+    if (args_count < 2 || args_count > 3) BAD_ARG_ERR();
     if (args_len[0] < 1) BAD_ARG_ERR();
     if (args_len[1] < 1) BAD_ARG_ERR();
-    if (args_len[2] < 1) BAD_ARG_ERR();
 
-    // Interpret the timestamp
-    uint64_t timestamp_64;
+    char *time_window_str;
     time_t timestamp;
-    err = value_to_int64(args[1], &timestamp_64);
-    if (err || timestamp_64 <= 0) BAD_ARG_ERR();
-    timestamp = (time_t) timestamp_64;
+    if (args_count == 2) {
+      time_window_str = args[1];
+      timestamp = time(NULL);
+    } else {
+      // Interpret the timestamp
+      uint64_t timestamp_64;
+      err = value_to_int64(args[1], &timestamp_64);
+      if (err || timestamp_64 <= 0) BAD_ARG_ERR();
+      timestamp = (time_t) timestamp_64;
+
+      if (args_len[2] < 1) BAD_ARG_ERR();
+      time_window_str = args[2];
+    }
+
 
     // Fetch the time window
     uint64_t time_window;
-    err = value_to_int64(args[2], &time_window);
-    if (err || time_window <= 0) BAD_ARG_ERR();
+    if (isdigit(time_window_str[0])) {
+      err = value_to_int64(time_window_str, &time_window);
+      if (err || time_window <= 0) BAD_ARG_ERR();
+    } else if (strcasecmp(time_window_str, "minute") == 0) {
+      time_window = 60;
+    } else if (strcasecmp(time_window_str, "hour") == 0) {
+      time_window = 3600;
+    } else if (strcasecmp(time_window_str, "day") == 0) {
+      time_window = 3600 * 24;
+    } else if (strcasecmp(time_window_str, "week") == 0) {
+      time_window = 3600 * 24 * 7;
+    } else if (strcasecmp(time_window_str, "month") == 0) {
+      time_window = 3600 * 24 * 30;
+    } else if (strcasecmp(time_window_str, "year") == 0) {
+      time_window = 3600 * 24 * 365;
+    } else {
+      BAD_ARG_ERR();
+    }
 
     // Build up the estimate and return it
     uint64_t estimate;
-    err = setmgr_set_size(handle->mgr, args[0], &estimate, timestamp,  time_window);
+    err = setmgr_set_size(handle->mgr, args[0], args_len[0], &estimate, timestamp,  time_window);
     if (err) {
       INTERNAL_ERROR();
       return;
@@ -294,7 +323,7 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *ar
         // If we have filled the buffer, check now
         if (index == MULTI_OP_SIZE) {
             // Handle the keys now
-            res = setmgr_set_keys(handle->mgr, args[0], (char**)&key_buf, index, timestamp);
+            res = setmgr_set_keys(handle->mgr, args[0], args_len[0], (char**)&key_buf, index, timestamp);
             if (res) goto SEND_RESULT;
 
             // Reset the index
@@ -304,7 +333,7 @@ static void handle_set_multi_cmd(hlld_conn_handler *handle, char **args, int *ar
 
     // Handle any remaining keys
     if (index) {
-        res = setmgr_set_keys(handle->mgr, args[0], key_buf, index, timestamp);
+        res = setmgr_set_keys(handle->mgr, args[0], args_len[0], key_buf, index, timestamp);
     }
 
 SEND_RESULT:
@@ -318,13 +347,9 @@ SEND_RESULT:
  * on a set name and a single key, responses are handled using
  * handle_multi_response.
  */
+/*
 static void handle_setop_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count,
         int(*setmgr_func)(struct hlld_setmgr *, char*)) {
-  if (setmgr_func && handle && args && args_len && args_count) {
-    return;
-  }
-  return;
-  /*
     // If we have no args, complain.
     if (!args) {
         handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
@@ -343,40 +368,67 @@ static void handle_setop_cmd(hlld_conn_handler *handle, char **args, int *args_l
     // Call into the set manager
     int res = setmgr_func(handle->mgr, args);
     handle_set_cmd_resp(handle, res);
-  */
 }
+*/
 
 static void handle_drop_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
-    handle_setop_cmd(handle, args, args_len, args_count, setmgr_drop_set);
+    assert(0);
+    (void) handle; (void) args; (void) args_len; (void) args_count;
+    // handle_setop_cmd(handle, args, args_len, args_count, setmgr_drop_set);
 }
 
 static void handle_close_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
-    handle_setop_cmd(handle, args, args_len, args_count, setmgr_unmap_set);
+    assert(0);
+    (void) handle; (void) args; (void) args_len; (void) args_count;
+    //handle_setop_cmd(handle, args, args_len, args_count, setmgr_unmap_set);
 }
 
 static void handle_clear_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
-    handle_setop_cmd(handle, args, args_len, args_count, setmgr_clear_set);
+    assert(0);
+    (void) handle; (void) args; (void) args_len; (void) args_count;
+    //handle_setop_cmd(handle, args, args_len, args_count, setmgr_clear_set);
 }
 
 // Callback invoked by list command to create an output
 // line for each set. We hold a set handle which we
 // can use to get some info about it
-static void list_set_cb(void *data, char *set_name, struct hlld_set *set) {
+static int list_dense_set_cb(void *data, char *full_key, struct hlld_set *set) {
+    (void) full_key;
+
     set_cb_data *cb_data = (set_cb_data *)data;
     int res;
 
     // Use the last flush size, attempt to get the latest size.
     // We do this in-case a list is at the same time as a unmap/delete.
     uint64_t estimate = set->set_config.size;
-    setmgr_set_size_total(cb_data->mgr, set_name, &estimate);
+    setmgr_set_size_total(cb_data->mgr, set->full_key, set->full_key_len, &estimate);
 
-    res = asprintf(cb_data->output, "+%s %f %u %llu %llu\r\n",
-            set_name,
-            set->set_config.default_eps,
-            set->set_config.default_precision,
-            (long long unsigned)hset_byte_size(set),
-            (long long unsigned)estimate);
+    char start_buffer[256];
+    char end_buffer[256];
+    res = snprintf(start_buffer, 255, "$%d\r\n", 
+        set->full_key_len);
     assert(res != -1);
+    res = snprintf(end_buffer, 255, "\r\n:%llu\r\n:%llu\r\n",
+        (long long unsigned)hset_byte_size(set),
+        (long long unsigned)estimate);
+    assert(res != -1);
+
+    char *output = (char *) malloc(sizeof(char) * (
+        strlen(start_buffer) + set->full_key_len + strlen(end_buffer) + 1
+    ));
+    if (output == NULL) {
+      return -1;
+    }
+    *cb_data->output = output;
+
+    // Create the full output
+    strcpy(output, start_buffer);
+    output += strlen(start_buffer);
+    memcpy(output, set->full_key ? set->full_key : "", sizeof(char) * set->full_key_len);
+    output += set->full_key_len;
+    strcpy(output, end_buffer);
+
+    return 0;
 }
 
 static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
@@ -406,7 +458,7 @@ static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_le
     int* output_bufs_len = (int*)malloc(num_out * sizeof(int));
 
     char count_string[512];
-    int count_length = snprintf(count_string, 512, "*%d\r\n", head->size);
+    int count_length = snprintf(count_string, 512, "*%d\r\n", head->size * 3);
     if (count_length < 1) {
       INTERNAL_ERROR();
       return;
@@ -421,7 +473,7 @@ static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_le
     struct hlld_set_list *node = head->head;
     set_cb_data cb_data = {handle->mgr, &resp};
     for (int i=0; i < head->size; i++) {
-        res = setmgr_set_cb(handle->mgr, node->set_name, list_set_cb, &cb_data);
+        res = setmgr_dense_set_cb(handle->mgr, node->full_key, strlen(node->full_key), list_dense_set_cb, &cb_data);
         if (res == 0) {
             output_bufs[i+1] = resp;
             output_bufs_len[i+1] = strlen(resp);
@@ -446,14 +498,14 @@ static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_le
 // Callback invoked by list command to create an output
 // line for each set. We hold a set handle which we
 // can use to get some info about it
-static void detail_set_cb(void *data, char *set_name, struct hlld_set *set) {
-    (void)set_name;
+static int detail_dense_set_cb(void *data, char *full_key, struct hlld_set *set) {
+    (void)full_key;
     set_cb_data *cb_data = (set_cb_data *)data;
 
     // Use the last flush size, attempt to get the latest size.
     // We do this in-case a list is at the same time as a unmap/delete.
     uint64_t size = set->set_config.size;
-    setmgr_set_size_total(cb_data->mgr, set_name, &size);
+    setmgr_set_size_total(cb_data->mgr, set->full_key, set->full_key_len, &size);
 
     // Get some metrics
     set_counters *counters = hset_counters(set);
@@ -477,7 +529,9 @@ storage:%llu\n",
     (unsigned long long)sets,
     (unsigned long long)size,
     (unsigned long long)storage);
-    assert(res != -1);
+
+    if (res < 0) return -1;
+    return 0;
 }
 
 static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
@@ -487,24 +541,36 @@ static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_
         return;
     }
 
-    char *info;
+    char *info = NULL;
     int info_len;
     set_cb_data cb_data = {handle->mgr, &info};
-    int res = setmgr_set_cb(handle->mgr, args[0], detail_set_cb, &cb_data);
+    int res = setmgr_set_cb(handle->mgr, args[0], detail_dense_set_cb, &cb_data);
     if (res != 0) {
         INTERNAL_ERROR();
         return;
     }
 
+    if (!info) {
+      INTERNAL_ERROR();
+      return;
+    }
+
     info_len = strlen(info);
-
     handle_string_resp(handle->conn, info, info_len);
-
     free(info);
 }
 
-static void handle_info_cmd(hlld_conn_handler *handle, int args_count) {
-    if (args_count != 0) {
+static void handle_info_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+    if (args_count == 1) {
+      if (strcasecmp(args[0], "summary") == 0) {
+          // `info summary` is a special command to fetch a human readable
+          // summary of database statistics. This does *not* follow the redis
+          // key:value standard of INFO output.
+          return handle_stats_cmd(handle, args, args_len, 0);
+      } else {
+        BAD_ARG_ERR();
+      }
+    } else if (args_count != 0) {
         BAD_ARG_ERR();
     }
 
@@ -512,8 +578,23 @@ static void handle_info_cmd(hlld_conn_handler *handle, int args_count) {
     handle_string_resp(handle->conn, (char *)string, strlen(string));
 }
 
+static void handle_stats_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+    (void) args;
+    (void) args_len;
+    if (args_count != 0) {
+        BAD_ARG_ERR();
+    }
+
+    char *stats = setmgr_get_stats(handle->mgr);
+    handle_string_resp(handle->conn, (char *)stats, strlen(stats));
+    free(stats);
+}
+
 
 static void handle_flush_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+  (void) args;
+  (void) args_len;
+
   if (handle && args && args_len && args_count) {
     return;
   }
@@ -642,6 +723,8 @@ static conn_cmd_type determine_client_command(char *cmd) {
                 type = SET_MULTI;
             else if (CMD_MATCH("shcard"))
                 type = SIZE;
+            else if (CMD_MATCH("stats"))
+                type = STATS;
             break;
     }
     return type;

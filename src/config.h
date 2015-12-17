@@ -10,8 +10,7 @@ struct hlld_config {
     int tcp_port;
     int udp_port;
     char *bind_address;
-    char *dense_dir;
-    char *sparse_dir;
+    char *data_dir;
     char *log_level;
     int syslog_log_level;
     double default_eps;

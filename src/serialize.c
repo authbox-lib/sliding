@@ -2,20 +2,26 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
+#include <memory.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/errno.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "serialize.h"
 #include <signal.h>
 #include "hll.h"
+#include "serialize.h"
+#include "sparse.h"
 
 #define SERIAL_VERSION 2
 #define ERR(err) if (err == -1) { return -1; }
 
- int serialize_int(serialize_t *s, int i) {
+// After the start of serialization the hll might fgrow a little more, tack on
+// some extra space in the buffer to handle this.
+#define SERIALIZE_BUFFER_EXTRA 256
+
+int serialize_int(serialize_t *s, int i) {
     if (s->offset + sizeof(int) >= s->size)
         return -1;
     *(int*)(s->memory+s->offset) = i;
@@ -31,7 +37,7 @@ int unserialize_int(serialize_t *s, int *i) {
     return 0;
 }
 
- int serialize_long(serialize_t *s, long i) {
+int serialize_long(serialize_t *s, long i) {
     if (s->offset + sizeof(long) >= s->size)
         return -1;
     *(long*)(s->memory+s->offset) = i;
@@ -73,7 +79,7 @@ int unserialize_ulong_long(serialize_t *s, uint64_t *i) {
 }
 
  int unserialize_long(serialize_t *s, long *i) {
-    if (s->offset + sizeof(long) >= s->size)
+    if (s->offset + sizeof(long) > s->size)
         return -1;
     *i = *(long*)(s->memory+s->offset);
     s->offset += sizeof(long);
@@ -81,7 +87,7 @@ int unserialize_ulong_long(serialize_t *s, uint64_t *i) {
 }
 
 int serialize_unsigned_char(serialize_t *s, unsigned char c) {
-    if (s->offset + sizeof(char) >= s->size)
+    if (s->offset + sizeof(char) > s->size)
         return -1;
     s->memory[s->offset] = c;
     s->offset += sizeof(char);
@@ -89,10 +95,42 @@ int serialize_unsigned_char(serialize_t *s, unsigned char c) {
 }
 
 int unserialize_unsigned_char(serialize_t *s, unsigned char *c) {
-    if (s->offset + sizeof(char) >= s->size)
+    if (s->offset + sizeof(char) > s->size)
         return -1;
     *c = s->memory[s->offset];
     s->offset += sizeof(char);
+    return 0;
+}
+
+int serialize_string(serialize_t *s, char *str, int len) {
+    if (len < 0) {
+        return -1;
+    }
+    ERR(serialize_int(s, len));
+    if (s->offset + sizeof(char) * len >= s->size)
+        return -1;
+
+    memcpy(s->memory + s->offset, str, sizeof(char) * len);
+    s->offset += sizeof(char) * len;
+    return 0;
+}
+int unserialize_string(serialize_t *s, char **out_str, int *out_len) {
+    int len;
+    ERR(unserialize_int(s, &len));
+
+    if (len < 0)
+        return -1;
+    if (s->offset + sizeof(char) * len > s->size)
+        return -1;
+
+    *out_len = len;
+    *out_str = (char *)malloc(sizeof(char) * len);
+    if (!*out_str)
+      return -1;
+
+    memcpy(*out_str, s->memory + s->offset, sizeof(char) * len);
+    s->offset += sizeof(char) * len;
+
     return 0;
 }
 
@@ -122,11 +160,6 @@ int unserialize_hll_register(serialize_t *s, hll_register *h) {
 }
 
 int serialize_hll(serialize_t *s, hll_t *h) {
-    size_t expected_size = serialized_hll_size(h);
-    if (s->size < expected_size) {
-        printf("buffer too small\n");
-        return -1;
-    }
     ERR(serialize_int(s, SERIAL_VERSION));
     ERR(serialize_int(s, (int)h->precision));
     ERR(serialize_int(s, h->window_period));
@@ -144,6 +177,7 @@ int unserialize_hll(serialize_t *s, hll_t *h) {
     if (version != SERIAL_VERSION) {
         return -1;
     }
+
     int temp;
     ERR(unserialize_int(s, &temp));
     h->precision = (unsigned char)temp;
@@ -156,86 +190,44 @@ int unserialize_hll(serialize_t *s, hll_t *h) {
     }
     return 0;
 }
-int unserialize_hll_from_filename(char *filename, hll_t *h) {
-    int fileno = open(filename, O_RDWR, 0644);
-    if (fileno == -1) {
-        printf("open failed to unserialize %s: %d\n", filename, errno);
-        return -errno;
+
+/***
+ * @return 0 on success
+ *        -1 on failure
+ *        -2 on set missing from sparsedb
+ */
+int unserialize_hll_from_sparsedb(
+    struct slidingd_sparsedb *sparsedb, hll_t *h, char *full_key, int full_key_len
+) {
+    size_t len;
+    unsigned char *buffer;
+    
+    int res = sparse_read_dense_data(sparsedb, full_key, full_key_len, &buffer, &len);
+    if (res) {
+        syslog(LOG_ERR, "failed to read data from sparsedb");
+        return -1;
     }
 
-    struct stat buf;
-    int res = fstat(fileno, &buf);
-    if (res != 0) {
-        perror("fstat failed on bitmap!");
-        close(fileno);
-        return -errno;
-    }
-
-    uint64_t len = buf.st_size;
-
-    res = unserialize_hll_from_file(fileno, len, h);
-
-    close(fileno);
-    return res;
-}
-
-int unserialize_hll_from_file(int fileno, uint64_t len, hll_t *h) {
-    // Hack for old kernels and bad length checking
     if (len == 0) {
-        return -EINVAL;
+        if (buffer) free(buffer);
+        return -2;
     }
 
-    // Check for and clear NEW_BITMAP from the mode
-    // Handle each mode
-    int flags;
-    int newfileno;
-    flags = MAP_SHARED;
-    newfileno = dup(fileno);
-    if (newfileno < 0) return -errno;
-
-    // Perform the map in
-    unsigned char* addr = (unsigned char*)mmap(NULL, len, PROT_READ|PROT_WRITE,
-            flags, newfileno, 0);
-
-    // Check for an error, otherwise return
-    if (addr == MAP_FAILED) {
-        perror("mmap failed!");
-        if (newfileno >= 0) {
-            close(newfileno);
-        }
-        return -errno;
-    }
-
-    // Provide some advise on how the memory will be used
-    int res;
-    res = madvise(addr, len, MADV_WILLNEED);
-    if (res != 0) {
-        perror("Failed to call madvise() [MADV_WILLNEED]");
-    }
-    res = madvise(addr, len, MADV_RANDOM);
-    if (res != 0) {
-        perror("Failed to call madvise() [MADV_RANDOM]");
-    }
-
-    serialize_t s = {addr, 0, len};
+    serialize_t s = {buffer, 0, len};
     res = unserialize_hll(&s, h);
     if (res != 0) {
         perror("Failed to unserialize hll");
     }
 
-    res = munmap(addr, len);
-    if (res != 0) {
-        perror("Failed to call munmap()");
-    }
-
-    close(newfileno);
-
     return res;
 }
 
 size_t serialized_hll_size(hll_t *h) {
-    // VERSION, type, precision, window_period, window_precision
-    size_t size = sizeof(int)*4 + sizeof(long);
+    // VERSION
+    size_t size = sizeof(int);
+
+    // precision, window_period, window_precision
+    size += sizeof(int) * 3;
 
     for(int i=0; i<NUM_REG(h->precision); i++) {
         // size, size*(timestamp, register)
@@ -244,35 +236,33 @@ size_t serialized_hll_size(hll_t *h) {
     return size;
 }
 
-int serialize_hll_to_filename(char *filename, hll_t *h) {
-    size_t serialized_size  = serialized_hll_size(h)+20;
+int serialize_hll_to_sparsedb(
+    struct slidingd_sparsedb *sparsedb, hll_t *h, char *full_key, int full_key_len
+  ) {
+    size_t serialized_size = serialized_hll_size(h);
+    size_t max_size = serialized_size + SERIALIZE_BUFFER_EXTRA;
 
-    int fileno = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fileno == -1) {
-        syslog(LOG_ERR, "open failed on serialization %s", strerror(errno) );
-        return -errno;
-    }
-
-    unsigned char* addr = (unsigned char*)malloc(sizeof(char)*serialized_size);
-
-    serialize_t s = {addr, 0, serialized_size};
+    unsigned char* addr = (unsigned char*)malloc(sizeof(char)*max_size);
+    serialize_t s = {addr, 0, max_size};
     int res = serialize_hll(&s, h);
     if (res == -1) {
         syslog(LOG_ERR, "unable to serialize hl");
         return -1;
     }
-    size_t written = 0;
-    while(written < serialized_size) {
-        res = pwrite(fileno, addr, serialized_size-written, written);
-        if (res == -1 && errno != EINTR) {
-            return -errno;
-        }
-        written += res;
-        res = 0;
-    }
 
-    close(fileno);
+    // Grab the serialized size from the data we actually wrote
+    serialized_size = s.offset;
+
+    res = sparse_write_dense_data(
+        sparsedb, full_key, full_key_len,
+        addr, serialized_size
+    );
     free(addr);
+
+    if (res) {
+      syslog(LOG_ERR, "failed to write dense data");
+      return -1;
+    }
 
     return 0;
 }

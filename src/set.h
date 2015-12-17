@@ -25,8 +25,8 @@ struct hlld_set {
     struct hlld_config *config;           // hlld configuration
     struct hlld_set_config set_config;    // Set-specific config
 
-    char *set_name;                 // The name of the set
-    char *full_path;                // Path to our data
+    char *full_key;                 // The full name of the set key
+    int full_key_len;
 
     char is_proxied;                // Is the bitmap available
     pthread_mutex_t hll_lock;       // Protects faulting in the HLL
@@ -48,7 +48,10 @@ struct hlld_set {
  * @arg set Output parameter, the new set
  * @return 0 on success
  */
-int init_set(struct hlld_config *config, char *set_name, int discover, struct hlld_set **set);
+int init_set(
+    struct hlld_config *config, char *set_name, 
+    int discover, struct hlld_set **set
+);
 
 /**
  * Destroys a set
