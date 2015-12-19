@@ -136,6 +136,46 @@ int sparse_is_dense(
 }
 
 /**
+ * Fetch all the points in a hll
+ * @return 0 if success
+ *         -1 on error
+ *         HLL_IS_DENSE if the we should use a dense set
+ */
+int sparse_get_points(
+    struct slidingd_sparsedb *sparsedb,
+    const char *set_name, int set_name_len,
+    hll_sparse_point **points, size_t *size
+) {
+  rocksdb_readoptions_t *readoptions = rocksdb_readoptions_create();
+
+  size_t len;
+  char *err = NULL;
+  *points = (hll_sparse_point *)
+      rocksdb_get(sparsedb->db, readoptions, set_name, set_name_len, &len, &err);
+  rocksdb_readoptions_destroy(readoptions);
+  if (err) {
+      syslog(LOG_ERR, "failed to fetch sparse points from rocksdb");
+      return -1;
+  }
+
+  if (len == 0) {
+    if (*points) free(*points);
+    *points = NULL;
+    *size = 0;
+    return 0;
+  }
+
+  // If the length is 1 this is a dense set
+  if (len == 1) {
+    free(*points);
+    return HLL_IS_DENSE;
+  }
+
+  *size = len / sizeof(hll_sparse_point);
+  return 0;
+}
+
+/**
  * Fetch total size of sparse hyperloglog
  * @arg h The hll to query
  * @return 0 if success
@@ -145,29 +185,12 @@ int sparse_size_total(
     struct slidingd_sparsedb *sparsedb,
     const char *set_name, int set_name_len
 ) {
-  rocksdb_readoptions_t *readoptions = rocksdb_readoptions_create();
+  hll_sparse_point *points;
+  size_t size;
 
-  size_t len;
-  char *err = NULL;
-  hll_sparse_point *points = (hll_sparse_point *)
-      rocksdb_get(sparsedb->db, readoptions, set_name, set_name_len, &len, &err);
-  if (err) {
-      syslog(LOG_ERR, "failed to fetch sparse points from rocksdb");
-      return -1;
-  }
-
-  // If the length is 1 this is a dense set
-  if (len == 1) {
-    rocksdb_readoptions_destroy(readoptions);
-    free(points);
-    return HLL_IS_DENSE;
-  }
-
-  int size = len / sizeof(hll_sparse_point);
-
-  rocksdb_readoptions_destroy(readoptions);
+  int err = sparse_get_points(sparsedb, set_name, set_name_len, &points, &size);
+  if (err) return err;
   free(points);
-
   return size;
 }
 /**

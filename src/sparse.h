@@ -32,6 +32,10 @@ int sparse_drop(
     struct slidingd_sparsedb *sparsedb,
     const char *full_key, int full_key_len
 );
+int sparse_get_points(
+    struct slidingd_sparsedb *sparsedb,
+    const char *full_key, int full_key_len
+);
 int sparse_is_dense(
     struct slidingd_sparsedb *sparsedb,
     const char *full_key, int full_key_len
@@ -68,5 +72,10 @@ int sparse_read_dense_data(
     struct slidingd_sparsedb *sparsedb,
     const char *full_key, int full_key_len,
     unsigned char **output, size_t *data_len
+);
+int sparse_get_points(
+    struct slidingd_sparsedb *sparsedb,
+    const char *set_name, int set_name_len,
+    hll_sparse_point **points, size_t *size
 );
 #endif

@@ -35,7 +35,7 @@ struct hlld_set_list_head {
 /**
  * Defines the number of keys before a hll is converted to the dense format.
  */
-#define SPARSE_MAX_VALUES 16
+#define SPARSE_MAX_VALUES 256
 
 /**
  * Initializer
@@ -175,6 +175,11 @@ int setmgr_list_cold_sets(struct hlld_setmgr *mgr, struct hlld_set_list_head **h
  * Convenience method to cleanup a set list.
  */
 void setmgr_cleanup_list(struct hlld_set_list_head *head);
+
+/**
+ * Convenience method to cleanup a set list.
+ */
+int setmgr_get_hashes(struct hlld_setmgr *mgr, char *full_key, int full_key_len, uint64_t **hashes, size_t *count);
 
 /**
  * This method allows a callback function to be invoked with hlld set.

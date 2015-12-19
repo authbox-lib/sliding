@@ -37,6 +37,7 @@ static void handle_close_cmd(hlld_conn_handler *handle, char **args, int *args_l
 static void handle_clear_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_list_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
+static void handle_get_hashes_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_flush_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 static void handle_size_cmd(hlld_conn_handler *handle, char **args, int *args_len, int arg_count);
 
@@ -123,6 +124,9 @@ int handle_client_connect(hlld_conn_handler *handle) {
                 break;
             case DETAIL:
                 handle_detail_cmd(handle, args + 1, args_len + 1, arg_count - 1);
+                break;
+            case GET_HASHES:
+                handle_get_hashes_cmd(handle, args + 1, args_len + 1, arg_count - 1);
                 break;
             case INFO:
                 handle_info_cmd(handle, args + 1, args_len + 1, arg_count - 1);
@@ -514,7 +518,8 @@ static int detail_dense_set_cb(void *data, char *full_key, struct hlld_set *set)
 
     // Generate a formatted string output
     int res;
-    res = asprintf(cb_data->output, "in_memory:%d\n\
+    res = asprintf(cb_data->output, "type:dense\n\
+in_memory:%d\n\
 page_ins:%llu\n\
 page_outs:%llu\n\
 epsilon:%f\n\
@@ -558,6 +563,54 @@ static void handle_detail_cmd(hlld_conn_handler *handle, char **args, int *args_
     info_len = strlen(info);
     handle_string_resp(handle->conn, info, info_len);
     free(info);
+}
+
+static void handle_get_hashes_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
+    // If we have no args, complain.
+    if (args_count != 1 || args_len[0] < 1) {
+        handle_client_err(handle->conn, (char*)&SET_NEEDED, SET_NEEDED_LEN);
+        return;
+    }
+
+    size_t count;
+    uint64_t *hashes;
+    int res = setmgr_get_hashes(handle->mgr, args[0], args_len[0], &hashes, &count);
+    if (res == HLL_IS_DENSE) {
+      handle_client_resp(handle->conn, (char *)SET_IS_DENSE, SET_IS_DENSE_LEN);
+      return;
+    } else if (res) {
+      INTERNAL_ERROR();
+      return;
+    }
+
+    const char *entry_format = "+%08x%08x\r\n";
+    const int entry_size = 1 + 16 + 2;
+    char buffer[256 + SPARSE_MAX_VALUES * entry_size];
+    char *end = buffer + sizeof(buffer) - 1;
+    char *addr = buffer;
+
+    res = snprintf(addr, end - addr, "*%lu\r\n", count);
+    if (res <= 0) {
+        free(hashes);
+        INTERNAL_ERROR();
+        return;
+    }
+    addr += res;
+
+
+    for (unsigned int i = 0; i < count; i++) {
+      res = snprintf(
+          addr + entry_size * i, entry_size + 1,
+          entry_format, ((uint32_t *)hashes)[i * 2], ((uint32_t *)hashes)[i * 2 + 1]);
+
+      if (res <= 0) {
+          free(hashes);
+          INTERNAL_ERROR();
+          return;
+      }
+    }
+    handle_client_resp(handle->conn, buffer, strlen(buffer));
+    free(hashes);
 }
 
 static void handle_info_cmd(hlld_conn_handler *handle, char **args, int *args_len, int args_count) {
@@ -712,12 +765,16 @@ static conn_cmd_type determine_client_command(char *cmd) {
             if (CMD_MATCH("echo"))
                 type = ECHO;
             break;
+        case 'l': case 'L':
+            if (CMD_MATCH("lrange"))
+                type = GET_HASHES;
+            if (CMD_MATCH("list"))
+                type = LIST;
+            break;
         case 'i': case 'I':
             if (CMD_MATCH("info"))
                 type = INFO;
-        case 'l': case 'L':
-            if (CMD_MATCH("list"))
-                type = LIST;
+            break;
         case 's': case 'S':
             if (CMD_MATCH("shadd"))
                 type = SET_MULTI;

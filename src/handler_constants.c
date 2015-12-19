@@ -33,6 +33,9 @@ static const int INTERNAL_ERR_LEN = sizeof(INTERNAL_ERR) - 1;
 static const char SET_NOT_EXIST[] = "-SET_NOT_EXIST\r\n";
 static const int SET_NOT_EXIST_LEN = sizeof(SET_NOT_EXIST) - 1;
 
+static const char SET_IS_DENSE[] = "-SET_IS_DENSE\r\n";
+static const int SET_IS_DENSE_LEN = sizeof(SET_IS_DENSE) - 1;
+
 static const char SET_NOT_PROXIED[] = "-NOT_PROXIED Close the set first\r\n";
 static const int SET_NOT_PROXIED_LEN = sizeof(SET_NOT_PROXIED) - 1;
 
@@ -62,6 +65,7 @@ typedef enum {
     STATS,          // Human readable server stats
     ECHO,
     DETAIL,         // Details about a set
+    GET_HASHES,     // Fetches all the hashes for the set
 
     // DEPRECATED:
     SIZE,           // Size of set

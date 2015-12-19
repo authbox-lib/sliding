@@ -1316,3 +1316,17 @@ void setmgr_vacuum(struct hlld_setmgr *mgr) {
     merge_old_versions(mgr, mgr->delta, vsn);
     delete_old_versions(mgr, vsn);
 }
+
+int setmgr_get_hashes(struct hlld_setmgr *mgr, char *full_key, int full_key_len, uint64_t **hashes, size_t *size) {
+    hll_sparse_point *points = NULL;
+
+    int err = sparse_get_points(mgr->sparsedb, full_key, full_key_len, &points, size);
+    if (err) return err;
+
+    *hashes = (uint64_t *)calloc(*size, sizeof(uint64_t));
+    for (unsigned int i = 0; i < *size; i++) {
+      (*hashes)[i] = points[i].hash;
+    }
+    if (points) free(points);
+    return 0;
+}

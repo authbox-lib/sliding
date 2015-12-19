@@ -6,6 +6,8 @@
 
 #define NUM_REG(precision) ((1 << precision))
 
+#define HLL_IS_DENSE -2
+
 // Ensure precision in a sane bound
 #define HLL_MIN_PRECISION 4      // 16 registers
 #define HLL_MAX_PRECISION 18     // 262,144 registers
