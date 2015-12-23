@@ -132,15 +132,25 @@ static void* flush_thread_main(void *in) {
             // sets might get deleted in the process
             struct hlld_set_list *node = head->head;
             unsigned int cmds = 0;
+            int successful = 0;
+            int clean = 0;
             while (node) {
-                setmgr_flush_dense_set(mgr, node->full_key);
+                res = setmgr_flush_dense_set(mgr, node->full_key);
+                if (res == 0) {
+                  successful += 1;
+                } else if (res == -2) {
+                  clean += 1;
+                }
                 if (!(++cmds % PERIODIC_CHECKPOINT)) setmgr_client_checkpoint(mgr);
                 node = node->next;
             }
 
             // Compute the elapsed time
             gettimeofday(&end, NULL);
-            syslog(LOG_INFO, "Flushed %d sets in %d msecs", head->size, timediff_msec(&start, &end));
+            syslog(
+                LOG_INFO, "Flushed %d/%d sets and %d clean sets in %d msecs",
+                successful, head->size - clean, clean, timediff_msec(&start, &end)
+            );
 
             // Cleanup
             setmgr_cleanup_list(head);

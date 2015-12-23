@@ -353,7 +353,9 @@ void setmgr_client_leave(struct hlld_setmgr *mgr) {
 /**
  * Flushes the set with the given name
  * @arg full_key The name of the set to flush
- * @return 0 on success. -1 if the set does not exist.
+ * @return 0 on success.
+ *        -1 if the set does not exist.
+ *        -2 if the set did not need to be flushed.
  */
 int setmgr_flush_dense_set(struct hlld_setmgr *mgr, char *full_key) {
     // Get the set
@@ -366,11 +368,12 @@ int setmgr_flush_dense_set(struct hlld_setmgr *mgr, char *full_key) {
     pthread_rwlock_rdlock(&set->rwlock);
 
     // Flush
-    hset_flush(set->set);
+    int res = hset_flush(set->set);
 
     // Release the lock
     pthread_rwlock_unlock(&set->rwlock);
-    return 0;
+
+    return res;
 }
 
 /**

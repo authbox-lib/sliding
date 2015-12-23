@@ -426,7 +426,7 @@ int sparse_write_dense_data(
 
     free(key);
     if (err) {
-        syslog(LOG_ERR, "rocksdb dense write fail: %s", err);
+        syslog(LOG_ERR, "dense write failure: %p: %s", err, err);
         return -1;
     }
     return 0;

@@ -113,11 +113,13 @@ int hset_is_proxied(struct hlld_set *set) {
  * set is proxied or not dirty.
  * @arg set The set to close
  * @return 0 on success.
+ *        -1 on error
+ *        -2 if the set did not need to be flushed
  */
 int hset_flush(struct hlld_set *set) {
     // Only do things if we are non-proxied
     if (set->is_proxied)
-        return 0;
+        return -2;
 
     // Time how long this takes
     struct timeval start, end;
@@ -125,25 +127,26 @@ int hset_flush(struct hlld_set *set) {
 
     // If we are not dirty, nothing to do
     if (!set->is_dirty)
-        return 0;
+        return -2;
 
     // Turn dirty off
     set->is_dirty = 0;
 
     // Flush the set
-    int res = 0;
-    if (!set->set_config.in_memory) {
-        res = serialize_hll_to_sparsedb(
-            sparse_get_global(), &set->hll,
-            set->full_key, set->full_key_len
-        );
+    int res = serialize_hll_to_sparsedb(
+        sparse_get_global(), &set->hll,
+        set->full_key, set->full_key_len
+    );
+
+    if (res) {
+      return -1;
     }
 
     // Compute the elapsed time
     gettimeofday(&end, NULL);
     syslog(LOG_DEBUG, "Flushed set '%s'. Total time: %d msec.",
             set->full_key, timediff_msec(&start, &end));
-    return res;
+    return 0;
 }
 
 /**

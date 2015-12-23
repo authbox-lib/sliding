@@ -259,10 +259,5 @@ int serialize_hll_to_sparsedb(
     );
     free(addr);
 
-    if (res) {
-      syslog(LOG_ERR, "failed to write dense data");
-      return -1;
-    }
-
-    return 0;
+    return res;
 }
